@@ -13,6 +13,9 @@ import (
 
 func TestToEinoMessagesMatchesNormalizedGoldenFixture(t *testing.T) {
 	fixture := readConvertFixture(t)
+	if len(fixture.Cases) == 0 {
+		t.Fatal("fixture cases are empty")
+	}
 	for _, tc := range fixture.Cases {
 		t.Run(tc.Name, func(t *testing.T) {
 			opts := []EinoOption{}
@@ -28,6 +31,68 @@ func TestToEinoMessagesMatchesNormalizedGoldenFixture(t *testing.T) {
 				t.Fatalf("normalized message = %#v, want %#v", got, tc.Normalized)
 			}
 		})
+	}
+}
+
+func TestMessageTextMatchesNormalizedGoldenFixture(t *testing.T) {
+	fixture := readConvertFixture(t)
+	if len(fixture.MessageTextCases) == 0 {
+		t.Fatal("fixture messageTextCases are empty")
+	}
+	for _, tc := range fixture.MessageTextCases {
+		t.Run(tc.Name, func(t *testing.T) {
+			if got := MessageText(tc.Input); got != tc.Normalized {
+				t.Fatalf("MessageText = %q, want %q", got, tc.Normalized)
+			}
+		})
+	}
+}
+
+func TestToEinoImagePartMatchesNormalizedGoldenFixture(t *testing.T) {
+	fixture := readConvertFixture(t)
+	if len(fixture.ImagePartCases) == 0 {
+		t.Fatal("fixture imagePartCases are empty")
+	}
+	for _, tc := range fixture.ImagePartCases {
+		t.Run(tc.Name, func(t *testing.T) {
+			got, ok := ToEinoImagePart(tc.Input)
+			if !ok {
+				t.Fatal("ToEinoImagePart ok = false, want true")
+			}
+			if normalized := normalizeInputPart(got); !reflect.DeepEqual(normalized, tc.Normalized) {
+				t.Fatalf("normalized image part = %#v, want %#v", normalized, tc.Normalized)
+			}
+		})
+	}
+}
+
+func TestToolCallsMatchNormalizedGoldenFixture(t *testing.T) {
+	fixture := readConvertFixture(t)
+	if len(fixture.ToolCalls.AGUI) == 0 || len(fixture.ToolCalls.Eino) == 0 {
+		t.Fatal("fixture toolCalls are empty")
+	}
+
+	einoCalls := ToEinoToolCalls(fixture.ToolCalls.AGUI)
+	if got, want := normalizeEinoToolCalls(einoCalls), normalizeAGUIToolCalls(fixture.ToolCalls.AGUI); !reflect.DeepEqual(got, want) {
+		t.Fatalf("ToEinoToolCalls = %#v, want %#v", got, want)
+	}
+
+	aguiCalls := ToAGUIToolCalls(schemaToolCallsFromFixture(fixture.ToolCalls.Eino))
+	if got, want := normalizeAGUIToolCalls(aguiCalls), fixture.ToolCalls.Eino; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ToAGUIToolCalls = %#v, want %#v", got, want)
+	}
+}
+
+func TestToAGUIMessagesMatchesNormalizedGoldenFixture(t *testing.T) {
+	fixture := readConvertFixture(t)
+	if len(fixture.AGUIMessages.Input) == 0 || len(fixture.AGUIMessages.Normalized) == 0 {
+		t.Fatal("fixture aguiMessages are empty")
+	}
+	testids.WithDeterministicGenerator(t, "convert")
+
+	got := ToAGUIMessages(schemaMessagesFromFixture(fixture.AGUIMessages.Input))
+	if normalized := normalizeAGUIMessages(got); !reflect.DeepEqual(normalized, fixture.AGUIMessages.Normalized) {
+		t.Fatalf("normalized AG-UI messages = %#v, want %#v", normalized, fixture.AGUIMessages.Normalized)
 	}
 }
 
@@ -106,7 +171,7 @@ func TestToEinoMessagesMapsRolesAndToolCalls(t *testing.T) {
 	if got[2].Role != schema.Assistant || got[2].Content != "assistant" {
 		t.Fatalf("assistant message = %#v", got[2])
 	}
-	if got[2].ToolCalls[0].ID != "tool-1" || got[2].ToolCalls[0].Function.Name != "file_read" {
+	if got[2].ToolCalls[0].ID != "tool-1" || got[2].ToolCalls[0].Function.Name != "file_read" || got[2].ToolCalls[0].Function.Arguments != `{"path":"README.md"}` {
 		t.Fatalf("assistant tool calls = %#v", got[2].ToolCalls)
 	}
 	if got[3].Role != schema.Tool || got[3].ToolCallID != "tool-1" || got[3].Content != "result" {
@@ -147,6 +212,23 @@ func TestToEinoImagePartSourceVariants(t *testing.T) {
 	})
 	if !ok || dataPart.Image == nil || dataPart.Image.Base64Data == nil || *dataPart.Image.Base64Data != "base64" || dataPart.Image.MIMEType != "image/png" {
 		t.Fatalf("data image part = %#v, %v", dataPart, ok)
+	}
+
+	legacyURLPart, ok := ToEinoImagePart(types.InputContent{
+		Type: types.InputContentTypeImage,
+		URL:  "https://example.test/legacy.png",
+	})
+	if !ok || legacyURLPart.Image == nil || legacyURLPart.Image.URL == nil || *legacyURLPart.Image.URL != "https://example.test/legacy.png" {
+		t.Fatalf("legacy URL image part = %#v, %v", legacyURLPart, ok)
+	}
+
+	legacyDataPart, ok := ToEinoImagePart(types.InputContent{
+		Type:     types.InputContentTypeImage,
+		Data:     "legacy-base64",
+		MimeType: "image/jpeg",
+	})
+	if !ok || legacyDataPart.Image == nil || legacyDataPart.Image.Base64Data == nil || *legacyDataPart.Image.Base64Data != "legacy-base64" || legacyDataPart.Image.MIMEType != "image/jpeg" {
+		t.Fatalf("legacy data image part = %#v, %v", legacyDataPart, ok)
 	}
 
 	if _, ok := ToEinoImagePart(types.InputContent{Type: types.InputContentTypeImage}); ok {
@@ -211,7 +293,10 @@ func TestToAGUIMessagesMapsRolesAndIDs(t *testing.T) {
 	if gotIDs := idsOf(got); !reflect.DeepEqual(gotIDs, []string{"convert-msg-000001", "convert-msg-000002", "convert-msg-000003", "convert-msg-000004"}) {
 		t.Fatalf("ids = %v", gotIDs)
 	}
-	if got[2].ToolCalls[0].Type != types.ToolCallTypeFunction || got[2].ToolCalls[0].Function.Name != "file_read" {
+	if gotContents := contentsOf(got); !reflect.DeepEqual(gotContents, []string{"system", "user", "assistant", "result"}) {
+		t.Fatalf("contents = %v", gotContents)
+	}
+	if got[2].ToolCalls[0].Type != types.ToolCallTypeFunction || got[2].ToolCalls[0].Function.Name != "file_read" || got[2].ToolCalls[0].Function.Arguments != "{}" {
 		t.Fatalf("assistant tool calls = %#v", got[2].ToolCalls)
 	}
 	if got[3].ToolCallID != "tool-1" {
@@ -230,6 +315,9 @@ func TestToolCallConversionSkipsEmptyIDs(t *testing.T) {
 	if einoCalls[0].ID != "tool-1" || einoCalls[0].Function.Name != "good" {
 		t.Fatalf("eino tool call = %#v", einoCalls[0])
 	}
+	if einoCalls[0].Function.Arguments != "{}" {
+		t.Fatalf("eino tool call arguments = %q, want {}", einoCalls[0].Function.Arguments)
+	}
 	if got := ToEinoToolCalls([]types.ToolCall{{ID: ""}}); got != nil {
 		t.Fatalf("empty-ID AG-UI calls converted to %#v, want nil", got)
 	}
@@ -243,6 +331,9 @@ func TestToolCallConversionSkipsEmptyIDs(t *testing.T) {
 	}
 	if aguiCalls[0].ID != "tool-2" || aguiCalls[0].Function.Name != "good" {
 		t.Fatalf("AG-UI tool call = %#v", aguiCalls[0])
+	}
+	if aguiCalls[0].Function.Arguments != "{}" {
+		t.Fatalf("AG-UI tool call arguments = %q, want {}", aguiCalls[0].Function.Arguments)
 	}
 	if got := ToAGUIToolCalls([]schema.ToolCall{{ID: ""}}); got != nil {
 		t.Fatalf("empty-ID eino calls converted to %#v, want nil", got)
@@ -265,6 +356,15 @@ func idsOf(messages []types.Message) []string {
 	return ids
 }
 
+func contentsOf(messages []types.Message) []string {
+	contents := make([]string, 0, len(messages))
+	for _, message := range messages {
+		content, _ := message.ContentString()
+		contents = append(contents, content)
+	}
+	return contents
+}
+
 func readConvertFixture(t *testing.T) convertFixture {
 	t.Helper()
 	data, err := os.ReadFile("../testdata/golden/convert.normalized.json")
@@ -280,30 +380,119 @@ func readConvertFixture(t *testing.T) convertFixture {
 
 func normalizeEinoMessage(message *schema.Message) normalizedEinoMessage {
 	out := normalizedEinoMessage{
-		EinoRole: string(message.Role),
-		Content:  message.Content,
+		EinoRole:   string(message.Role),
+		Content:    message.Content,
+		ToolCalls:  normalizeEinoToolCalls(message.ToolCalls),
+		ToolCallID: message.ToolCallID,
 	}
 	if len(message.UserInputMultiContent) > 0 {
 		out.UserInputMultiContent = make([]normalizedInputPart, 0, len(message.UserInputMultiContent))
 		for _, part := range message.UserInputMultiContent {
-			next := normalizedInputPart{Type: string(part.Type), Text: part.Text}
-			if part.Image != nil {
-				next.Image = &normalizedImage{MIMEType: part.Image.MIMEType}
-				if part.Image.URL != nil {
-					next.Image.URL = *part.Image.URL
-				}
-				if part.Image.Base64Data != nil {
-					next.Image.Base64Data = *part.Image.Base64Data
-				}
-			}
-			out.UserInputMultiContent = append(out.UserInputMultiContent, next)
+			out.UserInputMultiContent = append(out.UserInputMultiContent, normalizeInputPart(part))
 		}
 	}
 	return out
 }
 
+func normalizeInputPart(part schema.MessageInputPart) normalizedInputPart {
+	out := normalizedInputPart{Type: string(part.Type), Text: part.Text}
+	if part.Image != nil {
+		out.Image = &normalizedImage{MIMEType: part.Image.MIMEType}
+		if part.Image.URL != nil {
+			out.Image.URL = *part.Image.URL
+		}
+		if part.Image.Base64Data != nil {
+			out.Image.Base64Data = *part.Image.Base64Data
+		}
+	}
+	return out
+}
+
+func normalizeEinoToolCalls(calls []schema.ToolCall) []normalizedToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
+	out := make([]normalizedToolCall, 0, len(calls))
+	for _, call := range calls {
+		out = append(out, normalizedToolCall{
+			ID:   call.ID,
+			Type: call.Type,
+			Function: normalizedFunctionCall{
+				Name:      call.Function.Name,
+				Arguments: call.Function.Arguments,
+			},
+		})
+	}
+	return out
+}
+
+func normalizeAGUIToolCalls(calls []types.ToolCall) []normalizedToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
+	out := make([]normalizedToolCall, 0, len(calls))
+	for _, call := range calls {
+		out = append(out, normalizedToolCall{
+			ID:   call.ID,
+			Type: call.Type,
+			Function: normalizedFunctionCall{
+				Name:      call.Function.Name,
+				Arguments: call.Function.Arguments,
+			},
+		})
+	}
+	return out
+}
+
+func normalizeAGUIMessages(messages []types.Message) []normalizedAGUIMessage {
+	out := make([]normalizedAGUIMessage, 0, len(messages))
+	for _, message := range messages {
+		content, _ := message.ContentString()
+		out = append(out, normalizedAGUIMessage{
+			ID:         "<message-id>",
+			Role:       string(message.Role),
+			Content:    content,
+			ToolCalls:  normalizeAGUIToolCalls(message.ToolCalls),
+			ToolCallID: message.ToolCallID,
+		})
+	}
+	return out
+}
+
+func schemaToolCallsFromFixture(calls []normalizedToolCall) []schema.ToolCall {
+	out := make([]schema.ToolCall, 0, len(calls))
+	for _, call := range calls {
+		out = append(out, schema.ToolCall{
+			ID:   call.ID,
+			Type: call.Type,
+			Function: schema.FunctionCall{
+				Name:      call.Function.Name,
+				Arguments: call.Function.Arguments,
+			},
+		})
+	}
+	return out
+}
+
+func schemaMessagesFromFixture(messages []normalizedEinoMessage) []*schema.Message {
+	out := make([]*schema.Message, 0, len(messages))
+	for _, message := range messages {
+		out = append(out, &schema.Message{
+			Role:       schema.RoleType(message.EinoRole),
+			Content:    message.Content,
+			ToolCalls:  schemaToolCallsFromFixture(message.ToolCalls),
+			ToolCallID: message.ToolCallID,
+		})
+	}
+	return out
+}
+
 type convertFixture struct {
-	Cases []convertFixtureCase `json:"cases"`
+	Cases            []convertFixtureCase     `json:"cases"`
+	MessageTextCases []messageTextFixtureCase `json:"messageTextCases"`
+	ImagePartCases   []imagePartFixtureCase   `json:"imagePartCases"`
+	ToolCalls        toolCallsFixture         `json:"toolCalls"`
+	AGUIMessages     aguiMessagesFixture      `json:"aguiMessages"`
 }
 
 type convertFixtureCase struct {
@@ -315,10 +504,34 @@ type convertFixtureCase struct {
 	Normalized normalizedEinoMessage `json:"normalized"`
 }
 
+type messageTextFixtureCase struct {
+	Name       string        `json:"name"`
+	Input      types.Message `json:"input"`
+	Normalized string        `json:"normalized"`
+}
+
+type imagePartFixtureCase struct {
+	Name       string              `json:"name"`
+	Input      types.InputContent  `json:"input"`
+	Normalized normalizedInputPart `json:"normalized"`
+}
+
+type toolCallsFixture struct {
+	AGUI []types.ToolCall     `json:"agui"`
+	Eino []normalizedToolCall `json:"eino"`
+}
+
+type aguiMessagesFixture struct {
+	Input      []normalizedEinoMessage `json:"input"`
+	Normalized []normalizedAGUIMessage `json:"normalized"`
+}
+
 type normalizedEinoMessage struct {
 	EinoRole              string                `json:"einoRole"`
 	Content               string                `json:"content"`
 	UserInputMultiContent []normalizedInputPart `json:"userInputMultiContent"`
+	ToolCalls             []normalizedToolCall  `json:"toolCalls"`
+	ToolCallID            string                `json:"toolCallId"`
 }
 
 type normalizedInputPart struct {
@@ -331,4 +544,23 @@ type normalizedImage struct {
 	URL        string `json:"url"`
 	Base64Data string `json:"base64Data"`
 	MIMEType   string `json:"mimeType"`
+}
+
+type normalizedToolCall struct {
+	ID       string                 `json:"id"`
+	Type     string                 `json:"type"`
+	Function normalizedFunctionCall `json:"function"`
+}
+
+type normalizedFunctionCall struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+type normalizedAGUIMessage struct {
+	ID         string               `json:"id"`
+	Role       string               `json:"role"`
+	Content    string               `json:"content"`
+	ToolCalls  []normalizedToolCall `json:"toolCalls"`
+	ToolCallID string               `json:"toolCallId"`
 }

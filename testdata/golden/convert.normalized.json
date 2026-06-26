@@ -66,5 +66,169 @@
         "userInputMultiContent": null
       }
     }
-  ]
+  ],
+  "messageTextCases": [
+    {
+      "name": "joins text fragments and drops image fragments",
+      "input": {
+        "role": "user",
+        "content": [
+          {"type": "text", "text": "First"},
+          {"type": "image", "url": "https://example.test/cat.png"},
+          {"type": "text", "text": "Second"}
+        ]
+      },
+      "normalized": "First\nSecond"
+    }
+  ],
+  "imagePartCases": [
+    {
+      "name": "structured URL source",
+      "input": {
+        "type": "image",
+        "source": {
+          "type": "url",
+          "value": "https://example.test/cat.png"
+        }
+      },
+      "normalized": {
+        "type": "image_url",
+        "image": {
+          "url": "https://example.test/cat.png"
+        }
+      }
+    },
+    {
+      "name": "structured data source",
+      "input": {
+        "type": "image",
+        "source": {
+          "type": "data",
+          "value": "base64",
+          "mimeType": "image/png"
+        }
+      },
+      "normalized": {
+        "type": "image_url",
+        "image": {
+          "base64Data": "base64",
+          "mimeType": "image/png"
+        }
+      }
+    },
+    {
+      "name": "legacy URL field",
+      "input": {
+        "type": "image",
+        "url": "https://example.test/legacy.png"
+      },
+      "normalized": {
+        "type": "image_url",
+        "image": {
+          "url": "https://example.test/legacy.png"
+        }
+      }
+    },
+    {
+      "name": "legacy data field",
+      "input": {
+        "type": "image",
+        "data": "legacy-base64",
+        "mimeType": "image/jpeg"
+      },
+      "normalized": {
+        "type": "image_url",
+        "image": {
+          "base64Data": "legacy-base64",
+          "mimeType": "image/jpeg"
+        }
+      }
+    }
+  ],
+  "toolCalls": {
+    "agui": [
+      {
+        "id": "call-read",
+        "type": "function",
+        "function": {
+          "name": "file_read",
+          "arguments": "{\"path\":\"README.md\"}"
+        }
+      }
+    ],
+    "eino": [
+      {
+        "id": "call-write",
+        "type": "function",
+        "function": {
+          "name": "file_write",
+          "arguments": "{\"path\":\"README.md\",\"content\":\"ok\"}"
+        }
+      }
+    ]
+  },
+  "aguiMessages": {
+    "input": [
+      {
+        "einoRole": "system",
+        "content": "system"
+      },
+      {
+        "einoRole": "user",
+        "content": "user"
+      },
+      {
+        "einoRole": "assistant",
+        "content": "assistant",
+        "toolCalls": [
+          {
+            "id": "call-read",
+            "type": "function",
+            "function": {
+              "name": "file_read",
+              "arguments": "{\"path\":\"README.md\"}"
+            }
+          }
+        ]
+      },
+      {
+        "einoRole": "tool",
+        "content": "result",
+        "toolCallId": "call-read"
+      }
+    ],
+    "normalized": [
+      {
+        "id": "<message-id>",
+        "role": "system",
+        "content": "system"
+      },
+      {
+        "id": "<message-id>",
+        "role": "user",
+        "content": "user"
+      },
+      {
+        "id": "<message-id>",
+        "role": "assistant",
+        "content": "assistant",
+        "toolCalls": [
+          {
+            "id": "call-read",
+            "type": "function",
+            "function": {
+              "name": "file_read",
+              "arguments": "{\"path\":\"README.md\"}"
+            }
+          }
+        ]
+      },
+      {
+        "id": "<message-id>",
+        "role": "tool",
+        "content": "result",
+        "toolCallId": "call-read"
+      }
+    ]
+  }
 }
