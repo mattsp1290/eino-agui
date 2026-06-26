@@ -166,6 +166,36 @@ func TestToAGUIMessagesMapsRolesAndIDs(t *testing.T) {
 	}
 }
 
+func TestToolCallConversionSkipsEmptyIDs(t *testing.T) {
+	einoCalls := ToEinoToolCalls([]types.ToolCall{
+		{ID: "", Function: types.FunctionCall{Name: "bad", Arguments: "{}"}},
+		{ID: "tool-1", Function: types.FunctionCall{Name: "good", Arguments: "{}"}},
+	})
+	if len(einoCalls) != 1 {
+		t.Fatalf("eino tool calls len = %d, want 1", len(einoCalls))
+	}
+	if einoCalls[0].ID != "tool-1" || einoCalls[0].Function.Name != "good" {
+		t.Fatalf("eino tool call = %#v", einoCalls[0])
+	}
+	if got := ToEinoToolCalls([]types.ToolCall{{ID: ""}}); got != nil {
+		t.Fatalf("empty-ID AG-UI calls converted to %#v, want nil", got)
+	}
+
+	aguiCalls := ToAGUIToolCalls([]schema.ToolCall{
+		{ID: "", Function: schema.FunctionCall{Name: "bad", Arguments: "{}"}},
+		{ID: "tool-2", Function: schema.FunctionCall{Name: "good", Arguments: "{}"}},
+	})
+	if len(aguiCalls) != 1 {
+		t.Fatalf("AG-UI tool calls len = %d, want 1", len(aguiCalls))
+	}
+	if aguiCalls[0].ID != "tool-2" || aguiCalls[0].Function.Name != "good" {
+		t.Fatalf("AG-UI tool call = %#v", aguiCalls[0])
+	}
+	if got := ToAGUIToolCalls([]schema.ToolCall{{ID: ""}}); got != nil {
+		t.Fatalf("empty-ID eino calls converted to %#v, want nil", got)
+	}
+}
+
 func rolesOf(messages []types.Message) []types.Role {
 	roles := make([]types.Role, 0, len(messages))
 	for _, message := range messages {
