@@ -1,0 +1,37 @@
+{
+  "schema_version": "bead-swarm-history-v1",
+  "iteration": 4,
+  "branch": "bead-swarm/iteration-4-stream-helper-assignment",
+  "slug": "stream-helper-assignment",
+  "main_branch": "main",
+  "main_branch_source": "default",
+  "execution_mode": "parent-degraded",
+  "degraded_reason": "Nested orchestrator subagent could not access reviewer subagent tooling; parent executed one selected bead and used two parent-spawned Codex reviewer subagents.",
+  "selected_beads": ["eino-agui-kw1.22"],
+  "beads_done": ["eino-agui-kw1.22"],
+  "beads_blocked": [],
+  "beads_partial": [],
+  "merge_target": "main",
+  "validation": [
+    "git diff --check: pass",
+    "rg required helper assignment, no-duplicate proposal, Decision 0002, live option, no ID synthesis, and proposal-boundary evidence in docs/decisions/0004-stream-helper-assignment.md: pass"
+  ],
+  "review_mode": "reviewer-subagents",
+  "review_assurance": "normal",
+  "findings_fixed_re_reviewed": true,
+  "review_artifacts_local_only": true,
+  "review_blocker_summary": [],
+  "reviews": [
+    {
+      "reviewer": "stream-contract-auditor",
+      "verdict": "APPROVE",
+      "artifact": "reviews/bead-swarm-iteration-4-stream-helper-assignment-2026-06-26/stream-contract-auditor/04-action-items.md"
+    },
+    {
+      "reviewer": "api-boundary-reviewer",
+      "verdict": "APPROVE",
+      "artifact": "reviews/bead-swarm-iteration-4-stream-helper-assignment-2026-06-26/api-boundary-reviewer/04-action-items.md"
+    }
+  ],
+  "status": "complete"
+}
