@@ -1,0 +1,43 @@
+{
+  "schema_version": "bead-swarm-history-v1",
+  "iteration": 19,
+  "branch": "bead-swarm/iteration-19-convert-golden-tests",
+  "slug": "convert-golden-tests",
+  "main_branch": "main",
+  "main_branch_source": "default",
+  "execution_mode": "parent-degraded",
+  "degraded_reason": "Nested orchestrator subagent could not access reviewer subagent tooling; parent executed one selected bead and used two parent-spawned Codex reviewer subagents.",
+  "selected_beads": ["eino-agui-kw1.15"],
+  "beads_done": ["eino-agui-kw1.15"],
+  "beads_blocked": [],
+  "beads_partial": [],
+  "merge_target": "main",
+  "validation": [
+    "go test ./convert: pass",
+    "go test ./...: pass",
+    "go test -race ./convert: pass",
+    "go mod tidy -diff: pass",
+    "git diff --check: pass"
+  ],
+  "review_mode": "reviewer-subagents",
+  "review_assurance": "normal",
+  "findings_fixed_re_reviewed": true,
+  "review_artifacts_local_only": true,
+  "review_blocker_summary": [
+    "convert-golden-coverage-reviewer found fixture-backed normalized coverage did not yet cover every converter or tool-call round trips; fixed in 2aee621 and follow-up reviewed as resolved.",
+    "convert-test-quality-reviewer found content, tool-call argument, direct image field, and fixture-emptiness assertion gaps; fixed in 2aee621 and follow-up reviewed as resolved."
+  ],
+  "reviews": [
+    {
+      "reviewer": "convert-golden-coverage-reviewer",
+      "verdict": "PASS_AFTER_FIX",
+      "artifact": "reviews/bead-swarm-iteration-19-convert-golden-tests-2026-06-26/convert-golden-coverage-reviewer/05-followup.md"
+    },
+    {
+      "reviewer": "convert-test-quality-reviewer",
+      "verdict": "PASS_AFTER_FIX",
+      "artifact": "reviews/bead-swarm-iteration-19-convert-golden-tests-2026-06-26/convert-test-quality-reviewer/05-followup.md"
+    }
+  ],
+  "status": "complete"
+}
