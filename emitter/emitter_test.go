@@ -68,12 +68,14 @@ func TestToolCallBufferStartsOnceWhenIDAndNameKnown(t *testing.T) {
 	call.Update("", "", `{"path":`)
 	call.Update("tool-1", "", `"README.md"`)
 	call.Update("", "file_read", "")
+	call.Update("", "", `}`)
 	call.End()
 	call.End()
 
 	frames := normalizedFrames(t, sink)
 	if got, want := golden.FrameTypes(frames), []string{
 		"TOOL_CALL_START",
+		"TOOL_CALL_ARGS",
 		"TOOL_CALL_ARGS",
 		"TOOL_CALL_ARGS",
 		"TOOL_CALL_END",

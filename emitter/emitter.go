@@ -229,6 +229,10 @@ func (b *ToolCallBuffer) Update(id, name, argsDelta string) {
 	if name != "" {
 		b.name = name
 	}
+	if b.started {
+		b.emit.ToolArgs(b.id, argsDelta)
+		return
+	}
 	if argsDelta != "" {
 		b.pendingArgs = append(b.pendingArgs, argsDelta)
 	}
