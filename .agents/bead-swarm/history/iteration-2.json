@@ -1,0 +1,42 @@
+{
+  "schema_version": "bead-swarm-history-v1",
+  "iteration": 2,
+  "branch": "bead-swarm/iteration-2-eino-version-floor",
+  "slug": "eino-version-floor",
+  "main_branch": "main",
+  "main_branch_source": "default",
+  "execution_mode": "parent-degraded",
+  "degraded_reason": "Nested orchestrator subagent could not access reviewer subagent tooling; parent executed one selected bead and used two parent-spawned Codex reviewer subagents.",
+  "selected_beads": ["eino-agui-kw1.1"],
+  "beads_done": ["eino-agui-kw1.1"],
+  "beads_blocked": [],
+  "beads_partial": [],
+  "merge_target": "main",
+  "validation": [
+    "git diff --check: pass",
+    "rg required v0.8.13/v0.9.2, symbol, consumer, and ensemble caveat evidence in docs/decisions/0001-eino-version-floor.md: pass",
+    "go test ./... in /Users/punk1290/git/ag-ui-go-server-example: pass",
+    "go test ./... in /Users/punk1290/git/eino-providers: pass",
+    "go test ./... in /Users/punk1290/git/eino-tools: pass",
+    "temporary copy /Users/punk1290/git/eino-providers with go get github.com/cloudwego/eino@v0.9.2 && go test ./...: pass",
+    "temporary copy /Users/punk1290/git/eino-tools with go get github.com/cloudwego/eino@v0.9.2 && go test ./...: pass"
+  ],
+  "review_mode": "reviewer-subagents",
+  "review_assurance": "normal",
+  "findings_fixed_re_reviewed": true,
+  "review_artifacts_local_only": true,
+  "review_blocker_summary": [],
+  "reviews": [
+    {
+      "reviewer": "symbol-compatibility-auditor",
+      "verdict": "APPROVE",
+      "artifact": "reviews/bead-swarm-iteration-2-eino-version-floor-2026-06-26/symbol-compatibility-auditor/04-action-items.md"
+    },
+    {
+      "reviewer": "mvs-adoption-risk-reviewer",
+      "verdict": "APPROVE",
+      "artifact": "reviews/bead-swarm-iteration-2-eino-version-floor-2026-06-26/mvs-adoption-risk-reviewer/04-action-items.md"
+    }
+  ],
+  "status": "complete"
+}
