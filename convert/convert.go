@@ -167,18 +167,25 @@ func ToEinoImagePart(p types.InputContent) (schema.MessageInputPart, bool) {
 	}, true
 }
 
-// ToEinoToolCalls maps AG-UI tool calls to eino tool calls.
+// ToEinoToolCalls maps AG-UI tool calls to eino tool calls. Calls without an
+// ID are skipped because they cannot be correlated with tool results.
 func ToEinoToolCalls(tcs []types.ToolCall) []schema.ToolCall {
 	if len(tcs) == 0 {
 		return nil
 	}
 	out := make([]schema.ToolCall, 0, len(tcs))
 	for _, tc := range tcs {
+		if tc.ID == "" {
+			continue
+		}
 		out = append(out, schema.ToolCall{
 			ID:       tc.ID,
 			Type:     "function",
 			Function: schema.FunctionCall{Name: tc.Function.Name, Arguments: tc.Function.Arguments},
 		})
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
@@ -209,18 +216,25 @@ func ToAGUIMessages(msgs []*schema.Message) []types.Message {
 	return out
 }
 
-// ToAGUIToolCalls maps eino tool calls to AG-UI tool calls.
+// ToAGUIToolCalls maps eino tool calls to AG-UI tool calls. Calls without an
+// ID are skipped because AG-UI tool events and results cannot correlate them.
 func ToAGUIToolCalls(tcs []schema.ToolCall) []types.ToolCall {
 	if len(tcs) == 0 {
 		return nil
 	}
 	out := make([]types.ToolCall, 0, len(tcs))
 	for _, tc := range tcs {
+		if tc.ID == "" {
+			continue
+		}
 		out = append(out, types.ToolCall{
 			ID:       tc.ID,
 			Type:     types.ToolCallTypeFunction,
 			Function: types.FunctionCall{Name: tc.Function.Name, Arguments: tc.Function.Arguments},
 		})
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
