@@ -3,7 +3,9 @@ package emitter
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -34,6 +36,81 @@ func TestNewEmitterWritesLifecycleEvents(t *testing.T) {
 	}
 	if got := frames[1].Data["runId"]; got != "run-1" {
 		t.Fatalf("RUN_FINISHED runId = %v, want run-1", got)
+	}
+}
+
+func TestEmitterEventFamilies(t *testing.T) {
+	tests := []struct {
+		name string
+		emit func(*Emitter)
+		want []string
+	}{
+		{
+			name: "steps",
+			emit: func(e *Emitter) {
+				e.StepStarted("llm")
+				e.StepFinished("llm")
+			},
+			want: []string{"STEP_STARTED", "STEP_FINISHED"},
+		},
+		{
+			name: "text",
+			emit: func(e *Emitter) {
+				e.TextStart("msg-1")
+				e.TextContent("msg-1", "hello")
+				e.TextEnd("msg-1")
+			},
+			want: []string{"TEXT_MESSAGE_START", "TEXT_MESSAGE_CONTENT", "TEXT_MESSAGE_END"},
+		},
+		{
+			name: "reasoning",
+			emit: func(e *Emitter) {
+				e.ReasoningStart("reason-1")
+				e.ReasoningMessageStart("reason-1")
+				e.ReasoningContent("reason-1", "thinking")
+				e.ReasoningMessageEnd("reason-1")
+				e.ReasoningEnd("reason-1")
+				e.ReasoningEncryptedValue(events.ReasoningEncryptedValueSubtypeMessage, "reason-1", "cipher")
+			},
+			want: []string{
+				"REASONING_START",
+				"REASONING_MESSAGE_START",
+				"REASONING_MESSAGE_CONTENT",
+				"REASONING_MESSAGE_END",
+				"REASONING_END",
+				"REASONING_ENCRYPTED_VALUE",
+			},
+		},
+		{
+			name: "state activity custom",
+			emit: func(e *Emitter) {
+				e.StateSnapshot(map[string]any{"status": "working"})
+				e.StateDelta([]events.JSONPatchOperation{{Op: "replace", Path: "/status", Value: "done"}})
+				e.ActivitySnapshot("activity-1", "approval", map[string]any{"text": "approve?"})
+				e.ActivityDelta("activity-1", "approval", []events.JSONPatchOperation{{Op: "add", Path: "/ok", Value: true}})
+				e.Custom("agent_complete", map[string]any{"ok": true})
+			},
+			want: []string{
+				"STATE_SNAPSHOT",
+				"STATE_DELTA",
+				"ACTIVITY_SNAPSHOT",
+				"ACTIVITY_DELTA",
+				"CUSTOM",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sink := testsse.NewSink()
+			emit := NewEmitter(context.Background(), sink.Writer(), sink.SSEWriter(), "thread-1", "run-1", nil)
+			tt.emit(emit)
+
+			frames := normalizedFrames(t, sink)
+			if got := golden.FrameTypes(frames); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("frame types = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -146,6 +223,19 @@ func TestMessagesSnapshotScrubsEncryptedValuesWithoutMutatingInput(t *testing.T)
 	}
 	if _, ok := frameMessage["encryptedContent"]; ok {
 		t.Fatalf("encryptedContent leaked in frame: %#v", frameMessage)
+	}
+}
+
+func TestMessagesSnapshotMatchesNormalizedGoldenFixture(t *testing.T) {
+	fixture := readEmitterFixture(t)
+	sink := testsse.NewSink()
+	emit := NewEmitter(context.Background(), sink.Writer(), sink.SSEWriter(), "thread-1", "run-1", nil)
+
+	emit.MessagesSnapshot(fixture.Input.Messages)
+
+	frames := normalizedFrames(t, sink)
+	if got, want := comparableFrameData(frames), fixtureFrameData(fixture.Frames); !reflect.DeepEqual(got, want) {
+		t.Fatalf("frame data = %#v, want %#v", got, want)
 	}
 }
 
@@ -267,4 +357,86 @@ type invalidEvent struct {
 
 func (invalidEvent) Validate() error {
 	return errors.New("invalid event")
+}
+
+func readEmitterFixture(t *testing.T) emitterFixture {
+	t.Helper()
+	data, err := os.ReadFile("../testdata/golden/emitter.normalized.json")
+	if err != nil {
+		t.Fatalf("read emitter fixture: %v", err)
+	}
+	var fixture emitterFixture
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatalf("decode emitter fixture: %v", err)
+	}
+	return fixture
+}
+
+func comparableFrameData(frames []golden.Frame) []map[string]any {
+	out := make([]map[string]any, 0, len(frames))
+	for _, frame := range frames {
+		out = append(out, comparableData(frame.Data))
+	}
+	return out
+}
+
+func fixtureFrameData(frames []emitterFixtureFrame) []map[string]any {
+	out := make([]map[string]any, 0, len(frames))
+	for _, frame := range frames {
+		out = append(out, comparableData(frame.Data))
+	}
+	return out
+}
+
+func comparableData(data map[string]any) map[string]any {
+	out := make(map[string]any, len(data))
+	for key, value := range data {
+		switch key {
+		case "timestamp":
+			continue
+		case "id", "messageId":
+			out[key] = golden.MessageIDPlaceholder
+		case "messages":
+			out[key] = comparableMessages(value)
+		default:
+			out[key] = value
+		}
+	}
+	return out
+}
+
+func comparableMessages(value any) any {
+	messages, ok := value.([]any)
+	if !ok {
+		return value
+	}
+	out := make([]any, len(messages))
+	for i, message := range messages {
+		messageMap, ok := message.(map[string]any)
+		if !ok {
+			out[i] = message
+			continue
+		}
+		next := make(map[string]any, len(messageMap))
+		for key, child := range messageMap {
+			if key == "id" {
+				next[key] = golden.MessageIDPlaceholder
+			} else {
+				next[key] = child
+			}
+		}
+		out[i] = next
+	}
+	return out
+}
+
+type emitterFixture struct {
+	Input struct {
+		Messages []types.Message `json:"messages"`
+	} `json:"input"`
+	Frames []emitterFixtureFrame `json:"frames"`
+}
+
+type emitterFixtureFrame struct {
+	Data map[string]any `json:"data"`
 }
