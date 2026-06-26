@@ -47,7 +47,7 @@ func StreamTurn(ctx context.Context, emit *emitter.Emitter, cm model.ToolCalling
 	var textID string
 	var reasoningID string
 	textOpen, reasoningOpen := false, false
-	tcs := map[string]*emitter.ToolCallBuffer{}
+	tcs := map[string]*toolCallBuffer{}
 	var tcOrder []string
 
 	closeReasoning := func() {
@@ -73,18 +73,18 @@ func StreamTurn(ctx context.Context, emit *emitter.Emitter, cm model.ToolCalling
 			key := toolCallKey(tc)
 			buf := tcs[key]
 			if buf == nil {
-				buf = emit.NewToolCallBuffer()
+				buf = &toolCallBuffer{emit: emit}
 				tcs[key] = buf
 				tcOrder = append(tcOrder, key)
 			}
-			buf.Update(tc.ID, tc.Function.Name, tc.Function.Arguments)
+			buf.update(tc.ID, tc.Function.Name, tc.Function.Arguments)
 		}
 	}
 	endStreamedToolCalls := func() {
 		closeReasoning()
 		closeText()
 		for _, key := range tcOrder {
-			tcs[key].End()
+			tcs[key].end()
 		}
 	}
 	closeOpenBlocks := func() {
@@ -152,4 +152,56 @@ func toolCallKey(tc schema.ToolCall) string {
 		return "d" + tc.ID
 	}
 	return "p0"
+}
+
+type toolCallBuffer struct {
+	emit        *emitter.Emitter
+	id          string
+	name        string
+	pendingArgs []string
+	started     bool
+	ended       bool
+}
+
+func (b *toolCallBuffer) update(id, name, argsDelta string) {
+	if b == nil || b.emit == nil || b.ended {
+		return
+	}
+	if id != "" {
+		b.id = id
+	}
+	if name != "" {
+		b.name = name
+	}
+	if b.started {
+		b.emit.ToolArgs(b.id, argsDelta)
+		return
+	}
+	if argsDelta != "" {
+		b.pendingArgs = append(b.pendingArgs, argsDelta)
+	}
+	b.startIfReady()
+}
+
+func (b *toolCallBuffer) end() {
+	if b == nil || b.emit == nil || b.ended {
+		return
+	}
+	b.startIfReady()
+	if b.started {
+		b.emit.ToolEnd(b.id)
+	}
+	b.ended = true
+}
+
+func (b *toolCallBuffer) startIfReady() {
+	if b.started || b.id == "" || b.name == "" {
+		return
+	}
+	b.emit.ToolStart(b.id, b.name)
+	b.started = true
+	for _, arg := range b.pendingArgs {
+		b.emit.ToolArgs(b.id, arg)
+	}
+	b.pendingArgs = nil
 }

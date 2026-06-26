@@ -60,36 +60,6 @@ func TestEmitterSkipsEmptyDeltasAndNormalizesEmptyToolResult(t *testing.T) {
 	}
 }
 
-func TestToolCallBufferStartsOnceWhenIDAndNameKnown(t *testing.T) {
-	sink := testsse.NewSink()
-	emit := NewEmitter(context.Background(), sink.Writer(), sink.SSEWriter(), "thread-1", "run-1", nil)
-	call := emit.NewToolCallBuffer()
-
-	call.Update("", "", `{"path":`)
-	call.Update("tool-1", "", `"README.md"`)
-	call.Update("", "file_read", "")
-	call.Update("", "", `}`)
-	call.End()
-	call.End()
-
-	frames := normalizedFrames(t, sink)
-	if got, want := golden.FrameTypes(frames), []string{
-		"TOOL_CALL_START",
-		"TOOL_CALL_ARGS",
-		"TOOL_CALL_ARGS",
-		"TOOL_CALL_ARGS",
-		"TOOL_CALL_END",
-	}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("frame types = %v, want %v", got, want)
-	}
-	if got := golden.CountType(frames, "TOOL_CALL_START"); got != 1 {
-		t.Fatalf("TOOL_CALL_START count = %d, want 1", got)
-	}
-	if got := golden.CountType(frames, "TOOL_CALL_END"); got != 1 {
-		t.Fatalf("TOOL_CALL_END count = %d, want 1", got)
-	}
-}
-
 func TestToolEventsCloseOpenTextAndReasoningBlocks(t *testing.T) {
 	sink := testsse.NewSink()
 	emit := NewEmitter(context.Background(), sink.Writer(), sink.SSEWriter(), "thread-1", "run-1", nil)
