@@ -28,6 +28,19 @@ The public AG-UI-facing API must still be finalized against `ag-ui-go-server-exa
 claim ensemble parity until a later ensemble migration task wires AG-UI transport into ensemble or
 adds an adapter layer that consumes this library.
 
+## Supersedes Earlier Assumptions
+
+This decision corrects any earlier project text that described ensemble as a current AG-UI SSE
+backend or as an existing AG-UI SDK-aligned consumer. Until an ensemble adapter exists:
+
+- SDK alignment applies to `ag-ui-go-server-example` and the new `eino-agui` module, not to
+  ensemble.
+- The first public API is reference-app-proven, not two-consumer-proven.
+- Avoid freezing a stable v1 claim on any surface that is only justified by hypothetical ensemble
+  use.
+- Future ensemble needs should be handled as additive adapter-driven changes unless they reveal a
+  direct incompatibility with the reference-app extraction.
+
 ## Evidence
 
 Repository discovery:
@@ -44,6 +57,15 @@ module github.com/mattsp1290/ensemble
 go 1.26.3
 require github.com/cloudwego/eino v0.8.13
 ```
+
+Negative AG-UI SDK import check:
+
+```bash
+rg -n 'github.com/ag-ui-protocol|pkg/core/events|pkg/core/types|pkg/encoding/sse|SSEWriter' \
+  /Users/punk1290/git/ensemble
+```
+
+Result: no AG-UI SDK imports in ensemble code.
 
 Targeted validation:
 
@@ -71,7 +93,8 @@ ok github.com/mattsp1290/ag-ui-go-server-example/internal/agent
 
 ## Shared Concepts From Ensemble
 
-Ensemble still provides useful constraints for the library:
+Ensemble still provides useful compatibility and adoption constraints for the library. These are not
+first-extraction public API requirements:
 
 - eino v0.8.13 compatibility matters.
 - `schema.ConcatMessageStream` / `schema.ConcatMessages` behavior is load-bearing for stream
@@ -98,3 +121,25 @@ to diff. The safe extraction path is:
 
 This does not block the reference-app extraction, but it does block claiming that the AG-UI public
 API has been proven against two existing AG-UI consumers.
+
+## Downstream Bead Impact
+
+This decision satisfies the ensemble shared-surface precondition with a negative finding: there is
+no duplicated AG-UI surface to diff.
+
+| Bead or task family | Impact |
+| --- | --- |
+| `PRE_ENSEMBLE` / `eino-agui-kw1.2` | Complete as a scope-correction audit, not as two-consumer API proof. |
+| Convert, emitter, stream, and tools extraction beads | Unblocked, but their public API must be derived from `ag-ui-go-server-example` only for the first extraction. Ensemble observations may be used only as compatibility constraints, not as AG-UI API evidence. |
+| `STREAM_ASSIGN` | Altered: do not extract ensemble's ReAct validator, dispatcher events, or tool-loop settlement in the first AG-UI library. Keep the reference-app no-duplicate proposal contract and decide adjacent helpers from the reference app. |
+| `REQ_ENSEMBLE` | Altered: file an adapter/migration design request, not a direct import-swap request. |
+| Parity/release claims | Blocked from saying the AG-UI API is proven against two AG-UI consumers until ensemble actually consumes AG-UI transport or an adapter. |
+
+The ensemble follow-up request must be filed as an adapter/migration design request. It should not
+ask for direct import swaps in the current ensemble backend. The request should cover:
+
+- whether ensemble should expose AG-UI SSE directly or through a separate adapter service;
+- mapping from `dispatcher.RunEvent` kinds to AG-UI lifecycle/text/tool/state events;
+- how synthesized tool-call IDs and validator corrective messages should appear on the AG-UI wire;
+- when to add the AG-UI SDK dependency and align its version;
+- an acceptance gate that proves ensemble consumes `eino-agui` before any parity claim is made.
