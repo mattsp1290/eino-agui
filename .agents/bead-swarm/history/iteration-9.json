@@ -1,0 +1,42 @@
+{
+  "schema_version": "bead-swarm-history-v1",
+  "iteration": 9,
+  "branch": "bead-swarm/iteration-9-golden-sse-fixtures",
+  "slug": "golden-sse-fixtures",
+  "main_branch": "main",
+  "main_branch_source": "default",
+  "execution_mode": "parent-degraded",
+  "degraded_reason": "Nested orchestrator subagent could not access reviewer subagent tooling; parent executed one selected bead and used two parent-spawned Codex reviewer subagents.",
+  "selected_beads": ["eino-agui-kw1.10"],
+  "beads_done": ["eino-agui-kw1.10"],
+  "beads_blocked": [],
+  "beads_partial": [],
+  "merge_target": "main",
+  "validation": [
+    "go test ./...: pass",
+    "go mod tidy -diff: pass",
+    "git diff --check main...HEAD: pass",
+    "testdata/golden/capture_reference.sh: pass"
+  ],
+  "review_mode": "reviewer-subagents",
+  "review_assurance": "normal",
+  "findings_fixed_re_reviewed": true,
+  "review_artifacts_local_only": true,
+  "review_blocker_summary": [
+    "fixture-fidelity-reviewer requested changes because tool_binding omitted the handback MESSAGES_SNAPSHOT, emitter lacked pre-scrub encrypted input evidence, and provenance was not executable; fixed by updating fixtures/tests and adding capture_reference.sh.",
+    "normalizer-contract-reviewer approved the original normalizer contract."
+  ],
+  "reviews": [
+    {
+      "reviewer": "fixture-fidelity-reviewer",
+      "verdict": "APPROVE",
+      "artifact": "reviews/bead-swarm-iteration-9-golden-sse-fixtures-2026-06-26/fixture-fidelity-reviewer/04-action-items.md"
+    },
+    {
+      "reviewer": "normalizer-contract-reviewer",
+      "verdict": "APPROVE",
+      "artifact": "reviews/bead-swarm-iteration-9-golden-sse-fixtures-2026-06-26/normalizer-contract-reviewer/04-action-items.md"
+    }
+  ],
+  "status": "complete"
+}
