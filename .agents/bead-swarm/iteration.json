@@ -1,0 +1,11 @@
+{
+  "iteration": 3,
+  "branch": "bead-swarm/iteration-3-ensemble-shared-surface",
+  "slug": "ensemble-shared-surface",
+  "main_branch": "main",
+  "main_branch_source": "default",
+  "selected_beads": ["eino-agui-kw1.2"],
+  "beads_done_pending_close": [],
+  "beads_blocked": [],
+  "beads_partial": []
+}
