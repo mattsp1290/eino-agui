@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "eino_agui",
+  "project_id": "a999571d-33c4-4c91-8b5a-847a92d18498"
+}
