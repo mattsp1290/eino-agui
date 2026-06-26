@@ -61,6 +61,50 @@ func TestToJSONSchemaNilAndNull(t *testing.T) {
 	}
 }
 
+func TestToJSONSchemaRejectsUnsupportedKeywords(t *testing.T) {
+	tests := []struct {
+		name string
+		in   map[string]any
+		want string
+	}{
+		{
+			name: "mixed supported and unsupported",
+			in: map[string]any{
+				"type":       "object",
+				"x-provider": "metadata",
+			},
+			want: `unsupported JSON Schema keyword "x-provider"`,
+		},
+		{
+			name: "unsupported only",
+			in: map[string]any{
+				"x-provider": "metadata",
+			},
+			want: `unsupported JSON Schema keyword "x-provider"`,
+		},
+		{
+			name: "nested unsupported only",
+			in: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"city": map[string]any{
+						"x-provider": "metadata",
+					},
+				},
+			},
+			want: `unsupported JSON Schema keyword "properties.city.x-provider"`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ToJSONSchema(tt.in)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("ToJSONSchema() error = %v, want %s", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestClassifyToolCalls(t *testing.T) {
 	server, client := ClassifyToolCalls([]schema.ToolCall{
 		{ID: "call-client", Type: "function", Function: schema.FunctionCall{Name: "lookup_weather", Arguments: "{}"}},

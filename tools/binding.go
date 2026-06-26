@@ -52,7 +52,70 @@ func ToJSONSchema(params any) (*jsonschema.Schema, error) {
 	if err := json.Unmarshal(data, &schema); err != nil {
 		return nil, fmt.Errorf("not a valid JSON Schema: %w", err)
 	}
+	if err := rejectUnsupportedSchemaKeywords(data, &schema); err != nil {
+		return nil, err
+	}
 	return &schema, nil
+}
+
+func rejectUnsupportedSchemaKeywords(original []byte, parsed *jsonschema.Schema) error {
+	roundTrip, err := json.Marshal(parsed)
+	if err != nil {
+		return err
+	}
+
+	var originalValue any
+	if err := json.Unmarshal(original, &originalValue); err != nil {
+		return err
+	}
+	var roundTripValue any
+	if err := json.Unmarshal(roundTrip, &roundTripValue); err != nil {
+		return err
+	}
+	return rejectUnsupportedValue("", originalValue, roundTripValue)
+}
+
+func rejectUnsupportedValue(path string, original, roundTrip any) error {
+	originalMap, originalIsMap := original.(map[string]any)
+	roundTripMap, roundTripIsMap := roundTrip.(map[string]any)
+	if originalIsMap && roundTripIsMap {
+		for key, originalChild := range originalMap {
+			roundTripChild, ok := roundTripMap[key]
+			if !ok {
+				return fmt.Errorf("unsupported JSON Schema keyword %q", joinPath(path, key))
+			}
+			if err := rejectUnsupportedValue(joinPath(path, key), originalChild, roundTripChild); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if originalIsMap && !roundTripIsMap && len(originalMap) > 0 {
+		for key := range originalMap {
+			return fmt.Errorf("unsupported JSON Schema keyword %q", joinPath(path, key))
+		}
+	}
+
+	originalList, originalIsList := original.([]any)
+	roundTripList, roundTripIsList := roundTrip.([]any)
+	if originalIsList && roundTripIsList {
+		for i := range originalList {
+			if i >= len(roundTripList) {
+				return fmt.Errorf("unsupported JSON Schema element %q", joinPath(path, fmt.Sprintf("%d", i)))
+			}
+			if err := rejectUnsupportedValue(joinPath(path, fmt.Sprintf("%d", i)), originalList[i], roundTripList[i]); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func joinPath(path, key string) string {
+	if path == "" {
+		return key
+	}
+	return path + "." + key
 }
 
 // ClassifyToolCalls splits actionable model tool calls into server-owned and
