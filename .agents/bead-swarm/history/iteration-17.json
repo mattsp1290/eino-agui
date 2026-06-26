@@ -1,0 +1,43 @@
+{
+  "schema_version": "bead-swarm-history-v1",
+  "iteration": 17,
+  "branch": "bead-swarm/iteration-17-stream-golden-tests",
+  "slug": "stream-golden-tests",
+  "main_branch": "main",
+  "main_branch_source": "default",
+  "execution_mode": "parent-degraded",
+  "degraded_reason": "Nested orchestrator subagent could not access reviewer subagent tooling; parent executed one selected bead and used two parent-spawned Codex reviewer subagents.",
+  "selected_beads": ["eino-agui-kw1.24"],
+  "beads_done": ["eino-agui-kw1.24"],
+  "beads_blocked": [],
+  "beads_partial": [],
+  "merge_target": "main",
+  "validation": [
+    "go test ./stream: pass",
+    "go test ./...: pass",
+    "go test -race ./stream: pass",
+    "go mod tidy -diff: pass",
+    "git diff --check: pass"
+  ],
+  "review_mode": "reviewer-subagents",
+  "review_assurance": "normal",
+  "findings_fixed_re_reviewed": true,
+  "review_artifacts_local_only": true,
+  "review_blocker_summary": [
+    "stream-golden-coverage-reviewer found fixture comparison only checked event types; fixed in 824b51e and follow-up reviewed as resolved.",
+    "stream-test-quality-reviewer found unstable fixture index pointers and a weak no-duplicate proposal test; fixed in 824b51e and follow-up reviewed as resolved."
+  ],
+  "reviews": [
+    {
+      "reviewer": "stream-golden-coverage-reviewer",
+      "verdict": "PASS_AFTER_FIX",
+      "artifact": "reviews/bead-swarm-iteration-17-stream-golden-tests-2026-06-26/stream-golden-coverage-reviewer/05-followup.md"
+    },
+    {
+      "reviewer": "stream-test-quality-reviewer",
+      "verdict": "PASS_AFTER_FIX",
+      "artifact": "reviews/bead-swarm-iteration-17-stream-golden-tests-2026-06-26/stream-test-quality-reviewer/05-followup.md"
+    }
+  ],
+  "status": "complete"
+}
