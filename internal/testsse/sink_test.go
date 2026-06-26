@@ -82,6 +82,31 @@ func TestSinkFramesPreserveDelimitersAndReturnCopies(t *testing.T) {
 	}
 }
 
+func TestSinkSnapshotsDoNotImplicitlyFlush(t *testing.T) {
+	sink := NewSink()
+
+	if _, err := sink.Writer().WriteString("data: buffered\n\n"); err != nil {
+		t.Fatalf("direct WriteString() error = %v", err)
+	}
+
+	if got := sink.Bytes(); len(got) != 0 {
+		t.Fatalf("Bytes() before Flush() = %q, want empty", got)
+	}
+	if got := sink.String(); got != "" {
+		t.Fatalf("String() before Flush() = %q, want empty", got)
+	}
+	if got := sink.Frames(); got != nil {
+		t.Fatalf("Frames() before Flush() = %#v, want nil", got)
+	}
+
+	if err := sink.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if got, want := sink.String(), "data: buffered\n\n"; got != want {
+		t.Fatalf("String() after Flush() = %q, want %q", got, want)
+	}
+}
+
 func TestSinkResetClearsCapturedOutput(t *testing.T) {
 	sink := NewSink()
 

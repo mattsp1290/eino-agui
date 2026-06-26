@@ -53,9 +53,9 @@ func (s *Sink) Flush() error {
 	return s.writer.Flush()
 }
 
-// Bytes returns a copy of the captured SSE bytes.
+// Bytes returns a copy of the captured SSE bytes without flushing pending
+// buffered writes.
 func (s *Sink) Bytes() []byte {
-	_ = s.Flush()
 	return append([]byte(nil), s.buffer.Bytes()...)
 }
 
@@ -65,7 +65,7 @@ func (s *Sink) String() string {
 }
 
 // Frames returns captured SSE frames, preserving each trailing blank-line
-// delimiter.
+// delimiter. Pending buffered writes are not flushed.
 func (s *Sink) Frames() [][]byte {
 	data := s.Bytes()
 	if len(data) == 0 {
