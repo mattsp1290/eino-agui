@@ -1,0 +1,42 @@
+{
+  "schema_version": "bead-swarm-history-v1",
+  "iteration": 8,
+  "branch": "bead-swarm/iteration-8-fake-eino-stream",
+  "slug": "fake-eino-stream",
+  "main_branch": "main",
+  "main_branch_source": "default",
+  "execution_mode": "parent-degraded",
+  "degraded_reason": "Nested orchestrator subagent could not access reviewer subagent tooling; parent executed one selected bead and used two parent-spawned Codex reviewer subagents.",
+  "selected_beads": ["eino-agui-kw1.8"],
+  "beads_done": ["eino-agui-kw1.8"],
+  "beads_blocked": [],
+  "beads_partial": [],
+  "merge_target": "main",
+  "validation": [
+    "go test ./...: pass",
+    "go test -race ./internal/testmodel: pass",
+    "go mod tidy -diff: pass",
+    "git diff --check main...HEAD: pass"
+  ],
+  "review_mode": "reviewer-subagents",
+  "review_assurance": "normal",
+  "findings_fixed_re_reviewed": true,
+  "review_artifacts_local_only": true,
+  "review_blocker_summary": [
+    "eino-stream-fidelity-reviewer requested changes because WithTools cloned scripted state and could replay the same turn across bound wrappers; fixed by sharing state while keeping wrapper-local tools.",
+    "toolcall-index-stability-reviewer requested changes because encrypted reasoning parts were shallow-copied across replays; fixed by deep-copying Reasoning, StreamingMeta, and Extra with regression coverage."
+  ],
+  "reviews": [
+    {
+      "reviewer": "eino-stream-fidelity-reviewer",
+      "verdict": "APPROVE",
+      "artifact": "reviews/bead-swarm-iteration-8-fake-eino-stream-2026-06-26/eino-stream-fidelity-reviewer/04-action-items.md"
+    },
+    {
+      "reviewer": "toolcall-index-stability-reviewer",
+      "verdict": "APPROVE",
+      "artifact": "reviews/bead-swarm-iteration-8-fake-eino-stream-2026-06-26/toolcall-index-stability-reviewer/04-action-items.md"
+    }
+  ],
+  "status": "complete"
+}
