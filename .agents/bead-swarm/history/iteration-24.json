@@ -1,0 +1,42 @@
+{
+  "schema_version": "bead-swarm-history-v1",
+  "iteration": 24,
+  "branch": "bead-swarm/iteration-24-architecture-note",
+  "slug": "architecture-note",
+  "main_branch": "main",
+  "main_branch_source": "default",
+  "execution_mode": "parent-degraded",
+  "degraded_reason": "Nested orchestrator subagent could not access reviewer subagent tooling; parent executed one selected bead and used two parent-spawned Codex reviewer subagents.",
+  "selected_beads": ["eino-agui-kw1.32"],
+  "beads_done": ["eino-agui-kw1.32"],
+  "beads_blocked": [],
+  "beads_partial": [],
+  "merge_target": "main",
+  "validation": [
+    "go build ./...: pass",
+    "make check: pass",
+    "go test ./...: pass",
+    "go test ./... -run Parity -count=1: pass",
+    "go test -race ./...: pass",
+    "go mod tidy -diff: pass",
+    "git diff --check: pass"
+  ],
+  "review_mode": "reviewer-subagents",
+  "review_assurance": "normal",
+  "findings_fixed_re_reviewed": false,
+  "review_artifacts_local_only": true,
+  "review_blocker_summary": [],
+  "reviews": [
+    {
+      "reviewer": "architecture-accuracy-reviewer",
+      "verdict": "PASS",
+      "artifact": "reviews/bead-swarm-iteration-24-architecture-note-2026-06-26/architecture-accuracy-reviewer/01-findings.md"
+    },
+    {
+      "reviewer": "architecture-scope-reviewer",
+      "verdict": "PASS",
+      "artifact": "reviews/bead-swarm-iteration-24-architecture-note-2026-06-26/architecture-scope-reviewer/01-findings.md"
+    }
+  ],
+  "status": "complete"
+}
