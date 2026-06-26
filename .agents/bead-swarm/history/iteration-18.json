@@ -1,0 +1,42 @@
+{
+  "schema_version": "bead-swarm-history-v1",
+  "iteration": 18,
+  "branch": "bead-swarm/iteration-18-emitter-golden-tests",
+  "slug": "emitter-golden-tests",
+  "main_branch": "main",
+  "main_branch_source": "default",
+  "execution_mode": "parent-degraded",
+  "degraded_reason": "Nested orchestrator subagent could not access reviewer subagent tooling; parent executed one selected bead and used two parent-spawned Codex reviewer subagents.",
+  "selected_beads": ["eino-agui-kw1.21"],
+  "beads_done": ["eino-agui-kw1.21"],
+  "beads_blocked": [],
+  "beads_partial": [],
+  "merge_target": "main",
+  "validation": [
+    "go test ./emitter: pass",
+    "go test ./...: pass",
+    "go test -race ./emitter: pass",
+    "go mod tidy -diff: pass",
+    "git diff --check: pass"
+  ],
+  "review_mode": "reviewer-subagents",
+  "review_assurance": "normal",
+  "findings_fixed_re_reviewed": true,
+  "review_artifacts_local_only": true,
+  "review_blocker_summary": [
+    "emitter-test-quality-reviewer found the golden fixture comparator masked deterministic messages[].id values; fixed in b8a8f6a and follow-up reviewed as resolved."
+  ],
+  "reviews": [
+    {
+      "reviewer": "emitter-golden-coverage-reviewer",
+      "verdict": "PASS",
+      "artifact": "reviews/bead-swarm-iteration-18-emitter-golden-tests-2026-06-26/emitter-golden-coverage-reviewer/01-findings.md"
+    },
+    {
+      "reviewer": "emitter-test-quality-reviewer",
+      "verdict": "PASS_AFTER_FIX",
+      "artifact": "reviews/bead-swarm-iteration-18-emitter-golden-tests-2026-06-26/emitter-test-quality-reviewer/05-followup.md"
+    }
+  ],
+  "status": "complete"
+}
