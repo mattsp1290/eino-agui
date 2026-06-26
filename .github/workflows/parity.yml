@@ -22,4 +22,4 @@ jobs:
           cache: true
 
       - name: Run unit parity gate
-        run: go test ./... -run Parity -count=1
+        run: go test -v ./... -run Parity -count=1
