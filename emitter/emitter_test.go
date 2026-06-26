@@ -44,6 +44,9 @@ func TestEmitterSkipsEmptyDeltasAndNormalizesEmptyToolResult(t *testing.T) {
 	emit.TextContent("msg-1", "")
 	emit.ReasoningContent("reason-1", "")
 	emit.ToolArgs("tool-1", "")
+	emit.ToolStart("", "read_file")
+	emit.ToolStart("tool-1", "")
+	emit.ToolEnd("")
 	emit.StateDelta(nil)
 	emit.ActivityDelta("activity-1", "thinking", nil)
 	emit.ToolResult("tool-msg-1", "tool-1", "")
@@ -54,6 +57,82 @@ func TestEmitterSkipsEmptyDeltasAndNormalizesEmptyToolResult(t *testing.T) {
 	}
 	if got := frames[0].Data["content"]; got != "(empty)" {
 		t.Fatalf("TOOL_CALL_RESULT content = %v, want (empty)", got)
+	}
+}
+
+func TestToolCallBufferStartsOnceWhenIDAndNameKnown(t *testing.T) {
+	sink := testsse.NewSink()
+	emit := NewEmitter(context.Background(), sink.Writer(), sink.SSEWriter(), "thread-1", "run-1", nil)
+	call := emit.NewToolCallBuffer()
+
+	call.Update("", "", `{"path":`)
+	call.Update("tool-1", "", `"README.md"`)
+	call.Update("", "file_read", "")
+	call.End()
+	call.End()
+
+	frames := normalizedFrames(t, sink)
+	if got, want := golden.FrameTypes(frames), []string{
+		"TOOL_CALL_START",
+		"TOOL_CALL_ARGS",
+		"TOOL_CALL_ARGS",
+		"TOOL_CALL_END",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("frame types = %v, want %v", got, want)
+	}
+	if got := golden.CountType(frames, "TOOL_CALL_START"); got != 1 {
+		t.Fatalf("TOOL_CALL_START count = %d, want 1", got)
+	}
+	if got := golden.CountType(frames, "TOOL_CALL_END"); got != 1 {
+		t.Fatalf("TOOL_CALL_END count = %d, want 1", got)
+	}
+}
+
+func TestToolEventsCloseOpenTextAndReasoningBlocks(t *testing.T) {
+	sink := testsse.NewSink()
+	emit := NewEmitter(context.Background(), sink.Writer(), sink.SSEWriter(), "thread-1", "run-1", nil)
+
+	emit.TextStart("msg-1")
+	emit.TextContent("msg-1", "partial")
+	emit.ToolStart("tool-1", "file_read")
+
+	emit.ReasoningMessageStart("reason-1")
+	emit.ReasoningContent("reason-1", "thinking")
+	emit.ToolResult("tool-msg-1", "tool-1", "done")
+
+	frames := normalizedFrames(t, sink)
+	if got, want := golden.FrameTypes(frames), []string{
+		"TEXT_MESSAGE_START",
+		"TEXT_MESSAGE_CONTENT",
+		"TEXT_MESSAGE_END",
+		"TOOL_CALL_START",
+		"REASONING_MESSAGE_START",
+		"REASONING_MESSAGE_CONTENT",
+		"REASONING_MESSAGE_END",
+		"TOOL_CALL_RESULT",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("frame types = %v, want %v", got, want)
+	}
+}
+
+func TestDirectToolStartEmitsOnceAndRequiresStartedCallForArgsAndEnd(t *testing.T) {
+	sink := testsse.NewSink()
+	emit := NewEmitter(context.Background(), sink.Writer(), sink.SSEWriter(), "thread-1", "run-1", nil)
+
+	emit.ToolArgs("tool-1", "before")
+	emit.ToolEnd("tool-1")
+	emit.ToolStart("tool-1", "file_read")
+	emit.ToolStart("tool-1", "file_read")
+	emit.ToolArgs("tool-1", "{}")
+	emit.ToolEnd("tool-1")
+
+	frames := normalizedFrames(t, sink)
+	if got, want := golden.FrameTypes(frames), []string{
+		"TOOL_CALL_START",
+		"TOOL_CALL_ARGS",
+		"TOOL_CALL_END",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("frame types = %v, want %v", got, want)
 	}
 }
 
