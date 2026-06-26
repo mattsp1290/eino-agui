@@ -1,0 +1,12 @@
+{
+  "iteration": 16,
+  "selected_beads": [
+    {
+      "id": "eino-agui-kw1.26",
+      "title": "tools: golden tests for schema binding + client/server classification"
+    }
+  ],
+  "branch": "bead-swarm/iteration-16-tools-golden-tests",
+  "base_commit": "92ce6fc84f6dba9303597d4d3a7fe6126ce49a07",
+  "status": "in_progress"
+}
