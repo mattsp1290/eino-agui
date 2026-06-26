@@ -70,7 +70,7 @@ func TestToolBindingMatchesNormalizedGoldenFixture(t *testing.T) {
 			},
 		})
 	}
-	server, client := ClassifyToolCalls(calls, map[string]bool{"lookup_weather": true})
+	server, client := ClassifyToolCalls(calls, clientToolNames(fixture.Input.ClientTools))
 	if got := toolCallIDs(client); !reflect.DeepEqual(got, fixture.Normalized.Classified.Client) {
 		t.Fatalf("client IDs = %v, want %v", got, fixture.Normalized.Classified.Client)
 	}
@@ -211,7 +211,15 @@ func TestClassifyToolCalls(t *testing.T) {
 }
 
 func TestToolsPackageDoesNotMentionRouteTypes(t *testing.T) {
-	for _, path := range []string{"binding.go", "doc.go"} {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read tools package dir: %v", err)
+	}
+	for _, entry := range entries {
+		path := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			continue
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("read %s: %v", path, err)
@@ -249,6 +257,14 @@ func toolCallIDs(calls []schema.ToolCall) []string {
 		ids = append(ids, call.ID)
 	}
 	return ids
+}
+
+func clientToolNames(tools []aguitypes.Tool) map[string]bool {
+	names := make(map[string]bool, len(tools))
+	for _, tool := range tools {
+		names[tool.Name] = true
+	}
+	return names
 }
 
 type toolBindingFixture struct {
