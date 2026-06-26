@@ -1,6 +1,8 @@
 package convert
 
 import (
+	"encoding/json"
+	"os"
 	"reflect"
 	"testing"
 
@@ -8,6 +10,26 @@ import (
 	"github.com/cloudwego/eino/schema"
 	"github.com/mattsp1290/eino-agui/internal/testids"
 )
+
+func TestToEinoMessagesMatchesNormalizedGoldenFixture(t *testing.T) {
+	fixture := readConvertFixture(t)
+	for _, tc := range fixture.Cases {
+		t.Run(tc.Name, func(t *testing.T) {
+			opts := []EinoOption{}
+			if tc.Input.Provider == "openai" {
+				opts = append(opts, WithVisionSupport(true))
+			}
+
+			gotMessages := ToEinoMessages([]types.Message{tc.Input.AGUIMessage}, opts...)
+			if len(gotMessages) != 1 {
+				t.Fatalf("messages len = %d, want 1", len(gotMessages))
+			}
+			if got := normalizeEinoMessage(gotMessages[0]); !reflect.DeepEqual(got, tc.Normalized) {
+				t.Fatalf("normalized message = %#v, want %#v", got, tc.Normalized)
+			}
+		})
+	}
+}
 
 func TestToEinoMessagesVisionGating(t *testing.T) {
 	message := types.Message{
@@ -132,6 +154,37 @@ func TestToEinoImagePartSourceVariants(t *testing.T) {
 	}
 }
 
+func TestConvertMalformedInputs(t *testing.T) {
+	t.Run("user message drops unusable multimodal content", func(t *testing.T) {
+		got := ToEinoUserMessage(types.Message{Role: types.RoleUser, Content: []types.InputContent{
+			{Type: types.InputContentTypeText},
+			{Type: types.InputContentTypeImage},
+		}})
+		if got != nil {
+			t.Fatalf("ToEinoUserMessage = %#v, want nil", got)
+		}
+	})
+
+	t.Run("unknown image source is rejected", func(t *testing.T) {
+		got, ok := ToEinoImagePart(types.InputContent{
+			Type: types.InputContentTypeImage,
+			Source: &types.InputContentSource{
+				Type:  "unknown",
+				Value: "ignored",
+			},
+		})
+		if ok || !reflect.DeepEqual(got, schema.MessageInputPart{}) {
+			t.Fatalf("ToEinoImagePart = %#v, %v; want zero,false", got, ok)
+		}
+	})
+
+	t.Run("empty text-only user message is skipped", func(t *testing.T) {
+		if got := ToEinoMessages([]types.Message{{Role: types.RoleUser, Content: ""}}); len(got) != 0 {
+			t.Fatalf("ToEinoMessages = %#v, want empty", got)
+		}
+	})
+}
+
 func TestToAGUIMessagesMapsRolesAndIDs(t *testing.T) {
 	testids.WithDeterministicGenerator(t, "convert")
 
@@ -210,4 +263,72 @@ func idsOf(messages []types.Message) []string {
 		ids = append(ids, message.ID)
 	}
 	return ids
+}
+
+func readConvertFixture(t *testing.T) convertFixture {
+	t.Helper()
+	data, err := os.ReadFile("../testdata/golden/convert.normalized.json")
+	if err != nil {
+		t.Fatalf("read convert fixture: %v", err)
+	}
+	var fixture convertFixture
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatalf("decode convert fixture: %v", err)
+	}
+	return fixture
+}
+
+func normalizeEinoMessage(message *schema.Message) normalizedEinoMessage {
+	out := normalizedEinoMessage{
+		EinoRole: string(message.Role),
+		Content:  message.Content,
+	}
+	if len(message.UserInputMultiContent) > 0 {
+		out.UserInputMultiContent = make([]normalizedInputPart, 0, len(message.UserInputMultiContent))
+		for _, part := range message.UserInputMultiContent {
+			next := normalizedInputPart{Type: string(part.Type), Text: part.Text}
+			if part.Image != nil {
+				next.Image = &normalizedImage{MIMEType: part.Image.MIMEType}
+				if part.Image.URL != nil {
+					next.Image.URL = *part.Image.URL
+				}
+				if part.Image.Base64Data != nil {
+					next.Image.Base64Data = *part.Image.Base64Data
+				}
+			}
+			out.UserInputMultiContent = append(out.UserInputMultiContent, next)
+		}
+	}
+	return out
+}
+
+type convertFixture struct {
+	Cases []convertFixtureCase `json:"cases"`
+}
+
+type convertFixtureCase struct {
+	Name  string `json:"name"`
+	Input struct {
+		Provider    string        `json:"provider"`
+		AGUIMessage types.Message `json:"aguiMessage"`
+	} `json:"input"`
+	Normalized normalizedEinoMessage `json:"normalized"`
+}
+
+type normalizedEinoMessage struct {
+	EinoRole              string                `json:"einoRole"`
+	Content               string                `json:"content"`
+	UserInputMultiContent []normalizedInputPart `json:"userInputMultiContent"`
+}
+
+type normalizedInputPart struct {
+	Type  string           `json:"type"`
+	Text  string           `json:"text"`
+	Image *normalizedImage `json:"image"`
+}
+
+type normalizedImage struct {
+	URL        string `json:"url"`
+	Base64Data string `json:"base64Data"`
+	MIMEType   string `json:"mimeType"`
 }
