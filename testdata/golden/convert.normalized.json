@@ -1,0 +1,70 @@
+{
+  "unit": "convert",
+  "name": "vision-gated-message-conversion",
+  "source": {
+    "repository": "github.com/mattsp1290/ag-ui-go-server-example",
+    "commit": "a6dd6fd896ead9a06014a8a4bed0bb6a1a6cdfb5",
+    "files": [
+      "internal/agent/convert.go"
+    ]
+  },
+  "cases": [
+    {
+      "name": "openai provider preserves text and image input parts",
+      "input": {
+        "provider": "openai",
+        "aguiMessage": {
+          "role": "user",
+          "content": [
+            {"type": "text", "text": "What is in this image?"},
+            {
+              "type": "image",
+              "source": {
+                "type": "url",
+                "value": "https://example.test/cat.png"
+              }
+            }
+          ]
+        }
+      },
+      "normalized": {
+        "einoRole": "user",
+        "content": "",
+        "userInputMultiContent": [
+          {"type": "text", "text": "What is in this image?"},
+          {
+            "type": "image_url",
+            "image": {
+              "url": "https://example.test/cat.png"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "non-vision provider drops image and joins text fragments",
+      "input": {
+        "provider": "openai-codex",
+        "aguiMessage": {
+          "role": "user",
+          "content": [
+            {"type": "text", "text": "First line"},
+            {
+              "type": "image",
+              "source": {
+                "type": "url",
+                "value": "https://example.test/cat.png"
+              }
+            },
+            {"type": "text", "text": "Second line"}
+          ]
+        }
+      },
+      "normalized": {
+        "einoRole": "user",
+        "content": "First line\nSecond line",
+        "userInputMultiContent": null
+      }
+    }
+  ]
+}
