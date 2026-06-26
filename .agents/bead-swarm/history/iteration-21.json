@@ -1,0 +1,44 @@
+{
+  "schema_version": "bead-swarm-history-v1",
+  "iteration": 21,
+  "branch": "bead-swarm/iteration-21-lint-vet-format",
+  "slug": "lint-vet-format",
+  "main_branch": "main",
+  "main_branch_source": "default",
+  "execution_mode": "parent-degraded",
+  "degraded_reason": "Nested orchestrator subagent could not access reviewer subagent tooling; parent executed one selected bead and used two parent-spawned Codex reviewer subagents.",
+  "selected_beads": ["eino-agui-kw1.5"],
+  "beads_done": ["eino-agui-kw1.5"],
+  "beads_blocked": [],
+  "beads_partial": [],
+  "merge_target": "main",
+  "validation": [
+    "make check: pass",
+    "PATH=/opt/homebrew/bin:/usr/bin:/bin make fmt-check: fail as expected when goimports is absent",
+    "go test ./... -run Parity -count=1: pass",
+    "go test ./...: pass",
+    "go test -race ./...: pass",
+    "go mod tidy -diff: pass",
+    "git diff --check: pass"
+  ],
+  "review_mode": "reviewer-subagents",
+  "review_assurance": "normal",
+  "findings_fixed_re_reviewed": true,
+  "review_artifacts_local_only": true,
+  "review_blocker_summary": [
+    "quality-tooling-reviewer found fmt-check could pass when goimports was missing and the lint toolchain pin was duplicated; fixed in 82d061f and follow-up reviewed as resolved."
+  ],
+  "reviews": [
+    {
+      "reviewer": "lint-config-reviewer",
+      "verdict": "PASS",
+      "artifact": "reviews/bead-swarm-iteration-21-lint-vet-format-2026-06-26/lint-config-reviewer/01-findings.md"
+    },
+    {
+      "reviewer": "quality-tooling-reviewer",
+      "verdict": "PASS_AFTER_FIX",
+      "artifact": "reviews/bead-swarm-iteration-21-lint-vet-format-2026-06-26/quality-tooling-reviewer/05-followup.md"
+    }
+  ],
+  "status": "complete"
+}
