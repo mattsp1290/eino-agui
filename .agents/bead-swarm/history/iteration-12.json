@@ -1,0 +1,43 @@
+{
+  "schema_version": "bead-swarm-history-v1",
+  "iteration": 12,
+  "branch": "bead-swarm/iteration-12-emitter-tool-ordering",
+  "slug": "emitter-tool-ordering",
+  "main_branch": "main",
+  "main_branch_source": "default",
+  "execution_mode": "parent-degraded",
+  "degraded_reason": "Nested orchestrator subagent could not access reviewer subagent tooling; parent executed one selected bead and used two parent-spawned Codex reviewer subagents.",
+  "selected_beads": ["eino-agui-kw1.36"],
+  "beads_done": ["eino-agui-kw1.36"],
+  "beads_blocked": [],
+  "beads_partial": [],
+  "merge_target": "main",
+  "validation": [
+    "go test ./emitter: pass",
+    "go test ./...: pass",
+    "go test -race ./emitter: pass",
+    "go mod tidy -diff: pass",
+    "git diff --check: pass"
+  ],
+  "review_mode": "reviewer-subagents",
+  "review_assurance": "normal",
+  "findings_fixed_re_reviewed": true,
+  "review_artifacts_local_only": true,
+  "review_blocker_summary": [
+    "tool-ordering-boundary-reviewer passed with no boundary findings.",
+    "tool-buffer-behavior-reviewer found direct tool calls could emit args/end after ToolEnd; fixed in 1936d83 and follow-up reviewed as resolved."
+  ],
+  "reviews": [
+    {
+      "reviewer": "tool-ordering-boundary-reviewer",
+      "verdict": "PASS",
+      "artifact": "reviews/bead-swarm-iteration-12-emitter-tool-ordering-2026-06-26/tool-ordering-boundary-reviewer/00-overview.md"
+    },
+    {
+      "reviewer": "tool-buffer-behavior-reviewer",
+      "verdict": "PASS_AFTER_FIX",
+      "artifact": "reviews/bead-swarm-iteration-12-emitter-tool-ordering-2026-06-26/tool-buffer-behavior-reviewer/05-followup.md"
+    }
+  ],
+  "status": "complete"
+}
