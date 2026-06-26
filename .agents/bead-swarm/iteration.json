@@ -1,0 +1,11 @@
+{
+  "iteration": 4,
+  "branch": "bead-swarm/iteration-4-stream-helper-assignment",
+  "slug": "stream-helper-assignment",
+  "main_branch": "main",
+  "main_branch_source": "default",
+  "selected_beads": ["eino-agui-kw1.22"],
+  "beads_done_pending_close": [],
+  "beads_blocked": [],
+  "beads_partial": []
+}
