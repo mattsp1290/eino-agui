@@ -8,6 +8,23 @@
       "internal/agent/emitter.go"
     ]
   },
+  "input": {
+    "messages": [
+      {
+        "id": "<message-id>",
+        "role": "assistant",
+        "content": "visible answer",
+        "encryptedValue": "cipher-value",
+        "encryptedContent": "cipher-content"
+      },
+      {
+        "id": "<message-id>",
+        "role": "assistant",
+        "content": "reasoning summary",
+        "encryptedValue": "reasoning-cipher"
+      }
+    ]
+  },
   "frames": [
     {
       "id": "<sse-id>",

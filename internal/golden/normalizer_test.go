@@ -113,6 +113,11 @@ func TestGoldenFixtureContracts(t *testing.T) {
 	}
 
 	emitter := readFixture(t, "emitter.normalized.json")
+	emitterInput := emitter["input"].(map[string]any)
+	emitterInputMessages := emitterInput["messages"].([]any)
+	if !inputCarriesEncryptedFields(emitterInputMessages) {
+		t.Fatal("emitter fixture input does not carry encrypted fields")
+	}
 	emitterFrames := fixtureFrames(t, emitter)
 	messages := emitterFrames[0].Data["messages"].([]any)
 	for _, message := range messages {
@@ -127,10 +132,21 @@ func TestGoldenFixtureContracts(t *testing.T) {
 
 	toolBinding := readFixture(t, "tool_binding.normalized.json")
 	toolFrames := fixtureFrames(t, toolBinding)
-	if got, want := FrameTypes(toolFrames), []string{"TOOL_CALL_START", "TOOL_CALL_ARGS", "TOOL_CALL_END", "RUN_FINISHED"}; !reflect.DeepEqual(got, want) {
+	if got, want := FrameTypes(toolFrames), []string{"TOOL_CALL_START", "TOOL_CALL_ARGS", "TOOL_CALL_END", "MESSAGES_SNAPSHOT", "RUN_FINISHED"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("tool fixture event types = %#v, want %#v", got, want)
 	}
-	finished := toolFrames[3].Data
+	snapshotMessages := toolFrames[3].Data["messages"].([]any)
+	if got, want := len(snapshotMessages), 3; got != want {
+		t.Fatalf("tool handback snapshot message count = %d, want %d", got, want)
+	}
+	serverResult := snapshotMessages[2].(map[string]any)
+	if got, want := serverResult["toolCallId"], "call-server"; got != want {
+		t.Fatalf("synthetic server result toolCallId = %q, want %q", got, want)
+	}
+	if got := serverResult["content"].(string); !strings.Contains(got, "not executed") {
+		t.Fatalf("synthetic server result content = %q, want not-executed error", got)
+	}
+	finished := toolFrames[4].Data
 	outcome := finished["outcome"].(map[string]any)
 	if got, want := outcome["type"], "success"; got != want {
 		t.Fatalf("RUN_FINISHED outcome = %q, want %q", got, want)
@@ -170,6 +186,19 @@ func looksGeneratedMessageID(s string) bool {
 	return strings.HasPrefix(s, "msg-") ||
 		strings.HasPrefix(s, "golden-msg-") ||
 		strings.HasPrefix(s, "fixture-msg-")
+}
+
+func inputCarriesEncryptedFields(messages []any) bool {
+	for _, message := range messages {
+		m := message.(map[string]any)
+		if _, ok := m["encryptedValue"]; ok {
+			return true
+		}
+		if _, ok := m["encryptedContent"]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func readFixture(t *testing.T, name string) map[string]any {

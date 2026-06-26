@@ -18,3 +18,12 @@ The four fixture files correspond to the first extraction units:
   tool-call buffering.
 - `tool_binding.normalized.json`: client tool binding, classification, and
   client-tool handback.
+
+To re-check the fixtures against the reference implementation, run:
+
+```bash
+testdata/golden/capture_reference.sh
+```
+
+Set `REFERENCE_APP_DIR` when the reference checkout is not at
+`/Users/punk1290/git/ag-ui-go-server-example`.
