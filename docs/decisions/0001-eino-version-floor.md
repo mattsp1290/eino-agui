@@ -15,8 +15,8 @@ github.com/cloudwego/eino v0.9.2
 The reference app already uses v0.9.2, so v0.9.2 remains a required compatibility target. It does
 not need to be the module floor for the core seam identified so far.
 
-This decision should be revisited only if the ensemble backend diff in Decision 0002 proves that the
-shared surface needs an API absent from v0.8.13.
+This decision should be revisited only if the pending ensemble backend diff in Decision 0002 proves
+that the shared surface needs an API absent from v0.8.13.
 
 ## Symbol Availability
 
@@ -29,9 +29,9 @@ v0.8.13 and v0.9.2:
 | `schema.MessageInputImage` | Present | Present | `schema/message.go` defines `type MessageInputImage` in both versions. |
 | `schema.Message.UserInputMultiContent` | Present | Present | `schema.Message` includes `UserInputMultiContent []MessageInputPart` in both versions. |
 | `schema.ChatMessagePartTypeImageURL` | Present | Present | `schema/message.go` defines `ChatMessagePartTypeImageURL = "image_url"` in both versions. |
-| `schema.Message.ReasoningContent` | Present | Present | `schema.Message` includes `ReasoningContent string` in both versions. |
+| `schema.Message.ReasoningContent` | Present | Present | `schema.Message` includes `ReasoningContent string` in both versions; streamed chunks are `*schema.Message` values, so this covers the `chunk.ReasoningContent` concern from the planning prompt. |
 | `schema.ConcatMessages` | Present | Present | `schema/message.go` defines `func ConcatMessages(msgs []*Message) (*Message, error)` in both versions. |
-| Extra-preserving `schema.ConcatMessages` | Present | Present | Both versions collect `msg.Extra`, call `concatExtra`, and assign `ret.Extra`. |
+| Extra-merging `schema.ConcatMessages` | Present | Present | Both versions collect non-empty `msg.Extra` maps, merge them through `concatExtra`, and assign the merged map to `ret.Extra`. |
 
 Commands used:
 
@@ -79,7 +79,17 @@ The extraction tasks should therefore:
 
 - Set the initial `go.mod` floor to `github.com/cloudwego/eino v0.8.13`.
 - Include compatibility verification against v0.9.2, because the reference app already uses it.
+- Once this repo has a Go module, run the compatibility matrix in temporary worktrees or module
+  copies:
+
+  ```bash
+  go get github.com/cloudwego/eino@v0.8.13 && go test ./...
+  go get github.com/cloudwego/eino@v0.9.2 && go test ./...
+  ```
+
 - Avoid adding v0.9.x-only APIs unless a later task records a new decision with evidence.
+- Treat adjacent APIs introduced after v0.8.13, such as newer input-part variants not listed in the
+  symbol table above, as outside this approved floor until separately audited.
 - Treat the ensemble backend audit as the final adoption proof, not as already satisfied by local
   provider/tool tests.
 
