@@ -120,6 +120,31 @@ func TestTransportErrorCancelsAndStopsSubsequentWrites(t *testing.T) {
 	}
 }
 
+func TestTransportWriteErrorCancelsThroughSDKWritePrefix(t *testing.T) {
+	ctx := context.Background()
+	writer := bufio.NewWriterSize(errorWriter{}, 1)
+	var cancelCalls int
+	emit := NewEmitter(ctx, writer, sse.NewSSEWriter(), "thread-1", "run-1", func() {
+		cancelCalls++
+	})
+
+	emit.Custom("large-event", strings.Repeat("x", 1024))
+	emit.RunFinishedSuccess()
+
+	if emit.Err() == nil {
+		t.Fatal("Err() is nil, want transport error")
+	}
+	if !strings.HasPrefix(emit.Err().Error(), "SSE write failed:") {
+		t.Fatalf("Err() = %q, want SSE write failed prefix", emit.Err())
+	}
+	if cancelCalls != 1 {
+		t.Fatalf("cancel calls = %d, want 1", cancelCalls)
+	}
+	if emit.EncErr() != nil {
+		t.Fatalf("EncErr() = %v, want nil", emit.EncErr())
+	}
+}
+
 func TestEncodingErrorDoesNotCancelOrStopSubsequentWrites(t *testing.T) {
 	sink := testsse.NewSink()
 	var cancelCalls int
