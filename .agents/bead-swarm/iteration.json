@@ -1,0 +1,11 @@
+{
+  "iteration": 10,
+  "branch": "bead-swarm/iteration-10-tools-extraction",
+  "slug": "tools-extraction",
+  "main_branch": "main",
+  "main_branch_source": "default",
+  "selected_beads": ["eino-agui-kw1.25"],
+  "beads_done_pending_close": [],
+  "beads_blocked": [],
+  "beads_partial": []
+}
