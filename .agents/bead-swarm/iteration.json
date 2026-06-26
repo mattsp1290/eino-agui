@@ -1,0 +1,12 @@
+{
+  "iteration": 13,
+  "selected_beads": [
+    {
+      "id": "eino-agui-kw1.11",
+      "title": "convert: extract bidirectional message conversion (toEinoMessages/toAGUIMessages/messageText)"
+    }
+  ],
+  "branch": "bead-swarm/iteration-13-convert-extraction",
+  "base_commit": "94a503e247f17745262e1fe906c188d9b20a3650",
+  "status": "in_progress"
+}
