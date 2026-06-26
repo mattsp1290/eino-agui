@@ -1,0 +1,11 @@
+{
+  "iteration": 7,
+  "branch": "bead-swarm/iteration-7-byte-capturing-sse-sink",
+  "slug": "byte-capturing-sse-sink",
+  "main_branch": "main",
+  "main_branch_source": "default",
+  "selected_beads": ["eino-agui-kw1.9"],
+  "beads_done_pending_close": [],
+  "beads_blocked": [],
+  "beads_partial": []
+}
