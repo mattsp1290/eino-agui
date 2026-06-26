@@ -1,0 +1,11 @@
+{
+  "iteration": 5,
+  "branch": "bead-swarm/iteration-5-init-go-module",
+  "slug": "init-go-module",
+  "main_branch": "main",
+  "main_branch_source": "default",
+  "selected_beads": ["eino-agui-kw1.4"],
+  "beads_done_pending_close": [],
+  "beads_blocked": [],
+  "beads_partial": []
+}
