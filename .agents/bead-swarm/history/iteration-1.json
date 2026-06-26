@@ -1,0 +1,41 @@
+{
+  "schema_version": "bead-swarm-history-v1",
+  "iteration": 1,
+  "branch": "bead-swarm/iteration-1-agui-sdk-pin",
+  "slug": "agui-sdk-pin",
+  "main_branch": "main",
+  "main_branch_source": "default",
+  "execution_mode": "parent-degraded",
+  "degraded_reason": "Nested orchestrator subagent could not access reviewer subagent tooling; parent executed one selected bead and used two parent-spawned Codex reviewer subagents.",
+  "selected_beads": ["eino-agui-kw1.3"],
+  "beads_done": ["eino-agui-kw1.3"],
+  "beads_blocked": [],
+  "beads_partial": [],
+  "merge_target": "main",
+  "validation": [
+    "git diff --check: pass",
+    "rg required SDK pin, transport-prefix, consumer-alignment, and GoModSum evidence in docs/decisions/0003-agui-sdk-pin.md: pass",
+    "go get github.com/ag-ui-protocol/ag-ui/sdks/community/go@d2049debabd9 in a temporary module: pass; resolved v0.0.0-20260624151131-d2049debabd9",
+    "git -C /Users/punk1290/git/ag-ui diff --exit-code release/2026-06-24..677dfca132c9fdfbca6711a3ecce679300630e4e -- sdks/community/go: pass",
+    "git -C /Users/punk1290/git/ag-ui diff --exit-code HEAD -- sdks/community/go: pass"
+  ],
+  "review_mode": "reviewer-subagents",
+  "review_assurance": "normal",
+  "findings_fixed_re_reviewed": true,
+  "review_artifacts_local_only": true,
+  "review_blocker_summary": [],
+  "reviews": [
+    {
+      "reviewer": "pinning-correctness-auditor",
+      "verdict": "APPROVE",
+      "artifact": "reviews/bead-swarm-iteration-1-agui-sdk-pin-2026-06-26/pinning-correctness-auditor/04-action-items.md"
+    },
+    {
+      "reviewer": "adoption-risk-reviewer",
+      "verdict": "REQUEST_CHANGES",
+      "artifact": "reviews/bead-swarm-iteration-1-agui-sdk-pin-2026-06-26/adoption-risk-reviewer/04-action-items.md",
+      "resolution": "Both Important findings fixed in commit 6039bae and approved in reviews/bead-swarm-iteration-1-agui-sdk-pin-2026-06-26/adoption-risk-reviewer/fixes.md."
+    }
+  ],
+  "status": "complete"
+}
