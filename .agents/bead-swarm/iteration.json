@@ -1,0 +1,11 @@
+{
+  "iteration": 2,
+  "branch": "bead-swarm/iteration-2-eino-version-floor",
+  "slug": "eino-version-floor",
+  "main_branch": "main",
+  "main_branch_source": "default",
+  "selected_beads": ["eino-agui-kw1.1"],
+  "beads_done_pending_close": [],
+  "beads_blocked": [],
+  "beads_partial": []
+}
