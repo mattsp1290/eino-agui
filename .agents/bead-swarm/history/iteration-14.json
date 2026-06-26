@@ -1,0 +1,43 @@
+{
+  "schema_version": "bead-swarm-history-v1",
+  "iteration": 14,
+  "branch": "bead-swarm/iteration-14-stream-tap",
+  "slug": "stream-tap",
+  "main_branch": "main",
+  "main_branch_source": "default",
+  "execution_mode": "parent-degraded",
+  "degraded_reason": "Nested orchestrator subagent could not access reviewer subagent tooling; parent executed one selected bead and used two parent-spawned Codex reviewer subagents.",
+  "selected_beads": ["eino-agui-kw1.23"],
+  "beads_done": ["eino-agui-kw1.23"],
+  "beads_blocked": [],
+  "beads_partial": [],
+  "merge_target": "main",
+  "validation": [
+    "go test ./stream ./emitter: pass",
+    "go test ./...: pass",
+    "go test -race ./stream ./emitter: pass",
+    "go mod tidy -diff: pass",
+    "git diff --check: pass"
+  ],
+  "review_mode": "reviewer-subagents",
+  "review_assurance": "normal",
+  "findings_fixed_re_reviewed": true,
+  "review_artifacts_local_only": true,
+  "review_blocker_summary": [
+    "stream-behavior-reviewer passed with no behavior findings.",
+    "stream-boundary-reviewer found public emitter ToolCallBuffer leaked stream buffering state; fixed in a717ca8 by moving buffering into unexported stream implementation and follow-up reviewed as resolved."
+  ],
+  "reviews": [
+    {
+      "reviewer": "stream-boundary-reviewer",
+      "verdict": "PASS_AFTER_FIX",
+      "artifact": "reviews/bead-swarm-iteration-14-stream-tap-2026-06-26/stream-boundary-reviewer/05-followup.md"
+    },
+    {
+      "reviewer": "stream-behavior-reviewer",
+      "verdict": "PASS",
+      "artifact": "reviews/bead-swarm-iteration-14-stream-tap-2026-06-26/stream-behavior-reviewer/00-overview.md"
+    }
+  ],
+  "status": "complete"
+}
