@@ -1,0 +1,12 @@
+{
+  "iteration": 23,
+  "selected_beads": [
+    {
+      "id": "eino-agui-kw1.33",
+      "title": "Add minimal runnable example: eino model stream driving the Emitter"
+    }
+  ],
+  "branch": "bead-swarm/iteration-23-minimal-stream-example",
+  "base_commit": "12d1855fd3549ead79e0373e9ad0cd9ca1092315",
+  "status": "in_progress"
+}
