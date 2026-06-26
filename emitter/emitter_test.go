@@ -419,11 +419,7 @@ func comparableMessages(value any) any {
 		}
 		next := make(map[string]any, len(messageMap))
 		for key, child := range messageMap {
-			if key == "id" {
-				next[key] = golden.MessageIDPlaceholder
-			} else {
-				next[key] = child
-			}
+			next[key] = child
 		}
 		out[i] = next
 	}
