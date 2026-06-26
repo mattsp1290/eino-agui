@@ -29,6 +29,7 @@ type Emitter struct {
 	openTextID             string
 	openReasoningMessageID string
 	startedToolCalls       map[string]struct{}
+	endedToolCalls         map[string]struct{}
 }
 
 // NewEmitter builds an Emitter bound to a request's concrete SSE writer pair.
@@ -158,7 +159,7 @@ func (e *Emitter) ToolStart(toolCallID, name string) {
 		return
 	}
 	e.closeOpenBlocks()
-	if e.toolStarted(toolCallID) {
+	if e.toolStarted(toolCallID) || e.toolEnded(toolCallID) {
 		return
 	}
 	e.markToolStarted(toolCallID)
@@ -167,7 +168,7 @@ func (e *Emitter) ToolStart(toolCallID, name string) {
 
 // ToolArgs emits TOOL_CALL_ARGS unless delta is empty.
 func (e *Emitter) ToolArgs(toolCallID, delta string) {
-	if toolCallID == "" || delta == "" || !e.toolStarted(toolCallID) {
+	if toolCallID == "" || delta == "" || !e.toolStarted(toolCallID) || e.toolEnded(toolCallID) {
 		return
 	}
 	e.closeOpenBlocks()
@@ -176,11 +177,12 @@ func (e *Emitter) ToolArgs(toolCallID, delta string) {
 
 // ToolEnd emits TOOL_CALL_END.
 func (e *Emitter) ToolEnd(toolCallID string) {
-	if toolCallID == "" || !e.toolStarted(toolCallID) {
+	if toolCallID == "" || !e.toolStarted(toolCallID) || e.toolEnded(toolCallID) {
 		return
 	}
 	e.closeOpenBlocks()
 	e.write(events.NewToolCallEndEvent(toolCallID))
+	e.markToolEnded(toolCallID)
 }
 
 // ToolResult emits TOOL_CALL_RESULT. Empty content is normalized to "(empty)"
@@ -283,6 +285,21 @@ func (e *Emitter) markToolStarted(toolCallID string) {
 		e.startedToolCalls = make(map[string]struct{})
 	}
 	e.startedToolCalls[toolCallID] = struct{}{}
+}
+
+func (e *Emitter) toolEnded(toolCallID string) bool {
+	if e.endedToolCalls == nil {
+		return false
+	}
+	_, ok := e.endedToolCalls[toolCallID]
+	return ok
+}
+
+func (e *Emitter) markToolEnded(toolCallID string) {
+	if e.endedToolCalls == nil {
+		e.endedToolCalls = make(map[string]struct{})
+	}
+	e.endedToolCalls[toolCallID] = struct{}{}
 }
 
 // StateSnapshot emits STATE_SNAPSHOT.

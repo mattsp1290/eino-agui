@@ -125,6 +125,9 @@ func TestDirectToolStartEmitsOnceAndRequiresStartedCallForArgsAndEnd(t *testing.
 	emit.ToolStart("tool-1", "file_read")
 	emit.ToolArgs("tool-1", "{}")
 	emit.ToolEnd("tool-1")
+	emit.ToolArgs("tool-1", "after")
+	emit.ToolEnd("tool-1")
+	emit.ToolStart("tool-1", "file_read")
 
 	frames := normalizedFrames(t, sink)
 	if got, want := golden.FrameTypes(frames), []string{
