@@ -1,0 +1,36 @@
+{
+  "unit": "emitter",
+  "name": "messages-snapshot-scrubs-encrypted-reasoning",
+  "source": {
+    "repository": "github.com/mattsp1290/ag-ui-go-server-example",
+    "commit": "a6dd6fd896ead9a06014a8a4bed0bb6a1a6cdfb5",
+    "files": [
+      "internal/agent/emitter.go"
+    ]
+  },
+  "frames": [
+    {
+      "id": "<sse-id>",
+      "data": {
+        "type": "MESSAGES_SNAPSHOT",
+        "timestamp": "<timestamp>",
+        "messages": [
+          {
+            "id": "<message-id>",
+            "role": "assistant",
+            "content": "visible answer"
+          },
+          {
+            "id": "<message-id>",
+            "role": "assistant",
+            "content": "reasoning summary"
+          }
+        ]
+      }
+    }
+  ],
+  "assertions": {
+    "encryptedValue": "absent after scrubEncryptedValues",
+    "encryptedContent": "absent after scrubEncryptedValues"
+  }
+}

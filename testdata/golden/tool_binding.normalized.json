@@ -1,0 +1,55 @@
+{
+  "unit": "toolBinding",
+  "name": "client-tool-binding-and-handback",
+  "source": {
+    "repository": "github.com/mattsp1290/ag-ui-go-server-example",
+    "commit": "a6dd6fd896ead9a06014a8a4bed0bb6a1a6cdfb5",
+    "files": [
+      "internal/agent/runconfig.go",
+      "internal/agent/loop.go"
+    ]
+  },
+  "input": {
+    "clientTools": [
+      {
+        "name": "lookup_weather",
+        "description": "Read weather from the browser client",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {"type": "string"}
+          },
+          "required": ["city"]
+        }
+      }
+    ],
+    "actionableToolCalls": [
+      {"id": "call-client", "name": "lookup_weather", "arguments": "{\"city\":\"NYC\"}"},
+      {"id": "call-server", "name": "file_read", "arguments": "{\"path\":\"README.md\"}"}
+    ]
+  },
+  "normalized": {
+    "clientToolInfos": [
+      {
+        "name": "lookup_weather",
+        "description": "Read weather from the browser client",
+        "hasParamsOneOf": true
+      }
+    ],
+    "classified": {
+      "client": ["call-client"],
+      "server": ["call-server"]
+    }
+  },
+  "frames": [
+    {"data": {"type": "TOOL_CALL_START", "timestamp": "<timestamp>", "toolCallId": "call-client", "toolCallName": "lookup_weather"}},
+    {"data": {"type": "TOOL_CALL_ARGS", "timestamp": "<timestamp>", "toolCallId": "call-client", "delta": "{\"city\":\"NYC\"}"}},
+    {"data": {"type": "TOOL_CALL_END", "timestamp": "<timestamp>", "toolCallId": "call-client"}},
+    {"data": {"type": "RUN_FINISHED", "timestamp": "<timestamp>", "threadId": "thread-golden", "runId": "run-golden", "outcome": {"type": "success"}}}
+  ],
+  "assertions": {
+    "clientToolIsHandedBack": true,
+    "serverToolNotExecutedWhenClientCallPresent": true,
+    "duplicateClientToolNameError": "duplicate client tool name"
+  }
+}

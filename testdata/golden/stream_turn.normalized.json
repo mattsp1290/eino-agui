@@ -1,0 +1,55 @@
+{
+  "unit": "streamTurn",
+  "name": "reasoning-text-tool-buffering-order",
+  "source": {
+    "repository": "github.com/mattsp1290/ag-ui-go-server-example",
+    "commit": "a6dd6fd896ead9a06014a8a4bed0bb6a1a6cdfb5",
+    "files": [
+      "internal/agent/loop.go"
+    ]
+  },
+  "input": {
+    "streamToolCalls": true,
+    "chunks": [
+      {"role": "assistant", "reasoningContent": "think "},
+      {"role": "assistant", "content": "answer "},
+      {"role": "assistant", "reasoningContent": "again"},
+      {
+        "role": "assistant",
+        "toolCalls": [
+          {"index": 0, "id": "", "name": "", "arguments": "{\"city\":"}
+        ]
+      },
+      {
+        "role": "assistant",
+        "toolCalls": [
+          {"index": 0, "id": "call-weather", "name": "get_weather", "arguments": "\"NYC\"}"}
+        ]
+      }
+    ]
+  },
+  "frames": [
+    {"data": {"type": "REASONING_START", "timestamp": "<timestamp>", "messageId": "<message-id>"}},
+    {"data": {"type": "REASONING_MESSAGE_START", "timestamp": "<timestamp>", "messageId": "<message-id>", "role": "assistant"}},
+    {"data": {"type": "REASONING_MESSAGE_CONTENT", "timestamp": "<timestamp>", "messageId": "<message-id>", "delta": "think "}},
+    {"data": {"type": "REASONING_MESSAGE_END", "timestamp": "<timestamp>", "messageId": "<message-id>"}},
+    {"data": {"type": "REASONING_END", "timestamp": "<timestamp>", "messageId": "<message-id>"}},
+    {"data": {"type": "TEXT_MESSAGE_START", "timestamp": "<timestamp>", "messageId": "<message-id>", "role": "assistant"}},
+    {"data": {"type": "TEXT_MESSAGE_CONTENT", "timestamp": "<timestamp>", "messageId": "<message-id>", "delta": "answer "}},
+    {"data": {"type": "TEXT_MESSAGE_END", "timestamp": "<timestamp>", "messageId": "<message-id>"}},
+    {"data": {"type": "REASONING_START", "timestamp": "<timestamp>", "messageId": "<message-id>"}},
+    {"data": {"type": "REASONING_MESSAGE_START", "timestamp": "<timestamp>", "messageId": "<message-id>", "role": "assistant"}},
+    {"data": {"type": "REASONING_MESSAGE_CONTENT", "timestamp": "<timestamp>", "messageId": "<message-id>", "delta": "again"}},
+    {"data": {"type": "REASONING_MESSAGE_END", "timestamp": "<timestamp>", "messageId": "<message-id>"}},
+    {"data": {"type": "REASONING_END", "timestamp": "<timestamp>", "messageId": "<message-id>"}},
+    {"data": {"type": "TOOL_CALL_START", "timestamp": "<timestamp>", "toolCallId": "call-weather", "toolCallName": "get_weather"}},
+    {"data": {"type": "TOOL_CALL_ARGS", "timestamp": "<timestamp>", "toolCallId": "call-weather", "delta": "{\"city\":"}},
+    {"data": {"type": "TOOL_CALL_ARGS", "timestamp": "<timestamp>", "toolCallId": "call-weather", "delta": "\"NYC\"}"}},
+    {"data": {"type": "TOOL_CALL_END", "timestamp": "<timestamp>", "toolCallId": "call-weather"}}
+  ],
+  "assertions": {
+    "toolCallStartCount": 1,
+    "toolCallStartAfterBufferedArguments": true,
+    "textAndReasoningClosedBeforeToolStart": true
+  }
+}
