@@ -11,7 +11,7 @@ tool settlement in the consuming application.
 | Helper | Assignment | Rationale |
 | --- | --- | --- |
 | `toolCallKey` | Extract, as an unexported implementation detail of the stream tap. | The stream tap needs a stable key across streamed OPEN/delta/CLOSE chunks. The reference app keys by `*schema.ToolCall.Index`, with ID fallback, to buffer tool-call args until both ID and name are known. This is part of the AG-UI streaming event contract. |
-| `emitToolProposal` | Stays in app. | This is post-turn proposal emission for routes that do not use live streamed `TOOL_CALL_*` events. It is deliberately mutually exclusive with the stream tap: callers that stream tool calls must not also emit proposals. Keeping it in the app prevents duplicate AG-UI tool events and leaves route policy (`StreamToolCalls`, approval interrupts, client/server split) outside the library. |
+| `emitToolProposal` | Stays in app. | This is post-turn proposal emission for routes that do not use live streamed `TOOL_CALL_*` events, including resume-time proposal replay for saved pending calls. It is deliberately mutually exclusive with the stream tap: callers that stream tool calls must not also emit proposals. Keeping it in the app prevents duplicate AG-UI tool events and leaves route policy (`StreamToolCalls`, approval interrupts, client/server split) outside the library. |
 | `validateToolCalls` | Stays in app. | It mutates the assistant message, appends corrective `schema.ToolMessage` values to the route conversation, logs local diagnostics, and optionally emits `TOOL_CALL_RESULT`. Those are route and recovery-policy decisions, not generic stream-tap behavior. |
 | `validateToolCallsQuiet` | Stays in app. | This is a route-specific variant for surfaces such as shared-state and predictive-state routes that must not leak tool-call events on the wire. That route contract belongs with the app. |
 | `settlePendingToolCalls` | Stays in app. | It executes the app's `Deps.Tools`, applies human approval decisions, emits app-specific activity snapshots and state deltas, records file-read state, and threads tool results back into the conversation. It depends on `State`, `Deps`, approval resume semantics, and route-specific UI behavior. |
@@ -26,6 +26,11 @@ The extracted stream package should own the live stream-to-AG-UI tap:
 - buffer tool-call argument fragments until a non-empty tool-call ID and function name are known;
 - close any open text, reasoning, and streamed tool-call blocks on EOF or error;
 - return the concatenated `*schema.Message`.
+
+The public option should be library-native, for example `WithLiveToolCallEvents(true)` or an
+equivalent stream package option. It should not import, expose, or mirror the app's `RunConfig`.
+The tap should not synthesize missing tool-call IDs in the first extraction; empty-ID recovery or
+drop policy remains in app-owned validation.
 
 The package must document this caller contract:
 
@@ -53,8 +58,8 @@ Implementation tasks should:
 
 - put the streaming key/buffer state inside the stream package rather than exposing it as a public
   helper;
-- add tests for the no-duplicate-proposal contract by verifying that live-streamed calls are not
-  re-emitted by the migrated reference app route;
+- add tests for both sides of the proposal boundary: live-streamed calls are not re-emitted by the
+  migrated reference app route, while non-live routes can still use app-owned post-turn proposals;
 - leave app-specific validation and settlement in `ag-ui-go-server-example` during the first
   migration;
 - revisit a generic validator or tool-loop package only after a separate design task proves multiple
