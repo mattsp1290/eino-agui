@@ -103,6 +103,59 @@ func TestStreamClonesPreserveStableIndexPerReplay(t *testing.T) {
 	}
 }
 
+func TestWithToolsSharesScriptedState(t *testing.T) {
+	base := NewScriptedModel(
+		[]*schema.Message{TextChunk("first")},
+		[]*schema.Message{TextChunk("second")},
+	)
+
+	firstModel, err := base.WithTools([]*schema.ToolInfo{{Name: "search"}})
+	if err != nil {
+		t.Fatalf("WithTools() first error = %v", err)
+	}
+	secondModel, err := base.WithTools([]*schema.ToolInfo{{Name: "search"}})
+	if err != nil {
+		t.Fatalf("WithTools() second error = %v", err)
+	}
+
+	first, err := firstModel.Generate(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Generate() first bound model error = %v", err)
+	}
+	second, err := secondModel.Generate(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Generate() second bound model error = %v", err)
+	}
+	if first.Content != "first" || second.Content != "second" {
+		t.Fatalf("bound Generate() contents = %q, %q; want first, second", first.Content, second.Content)
+	}
+	if got, want := base.Calls(), 2; got != want {
+		t.Fatalf("base Calls() = %d, want %d", got, want)
+	}
+}
+
+func TestReplayModelDeepCopiesEncryptedReasoningParts(t *testing.T) {
+	model := NewReplayModel([]*schema.Message{EncryptedReasoningChunk("hidden", "sig-fixture")})
+
+	first := streamAll(t, model)
+	firstPart := &first[0].AssistantGenMultiContent[0]
+	firstPart.Reasoning.Text = "mutated"
+	firstPart.Reasoning.Signature = "mutated-sig"
+	firstPart.StreamingMeta.Index = 99
+
+	second := streamAll(t, model)
+	secondPart := second[0].AssistantGenMultiContent[0]
+	if got, want := secondPart.Reasoning.Text, "hidden"; got != want {
+		t.Fatalf("replayed reasoning text = %q, want %q", got, want)
+	}
+	if got, want := secondPart.Reasoning.Signature, "sig-fixture"; got != want {
+		t.Fatalf("replayed reasoning signature = %q, want %q", got, want)
+	}
+	if got, want := secondPart.StreamingMeta.Index, 0; got != want {
+		t.Fatalf("replayed streaming meta index = %d, want %d", got, want)
+	}
+}
+
 func TestMixedStreamChunksCoverFixtureCases(t *testing.T) {
 	chunks := MixedStreamChunks()
 

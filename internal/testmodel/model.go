@@ -13,23 +13,27 @@ var _ model.ToolCallingChatModel = (*Model)(nil)
 
 // Model is a deterministic ToolCallingChatModel for tests.
 type Model struct {
+	state *state
+	tools []*schema.ToolInfo
+}
+
+type state struct {
 	mu     sync.Mutex
 	turns  [][]*schema.Message
 	replay bool
-	tools  []*schema.ToolInfo
 	calls  int
 }
 
 // NewScriptedModel returns a model that consumes one turn per Generate or
 // Stream call.
 func NewScriptedModel(turns ...[]*schema.Message) *Model {
-	return &Model{turns: cloneTurns(turns), replay: false}
+	return &Model{state: &state{turns: cloneTurns(turns), replay: false}}
 }
 
 // NewReplayModel returns a model that replays the same chunks on every Generate
 // or Stream call.
 func NewReplayModel(chunks []*schema.Message) *Model {
-	return &Model{turns: cloneTurns([][]*schema.Message{chunks}), replay: true}
+	return &Model{state: &state{turns: cloneTurns([][]*schema.Message{chunks}), replay: true}}
 }
 
 // Generate returns the concatenated messages for the next scripted turn.
@@ -52,48 +56,41 @@ func (m *Model) Stream(_ context.Context, _ []*schema.Message, _ ...model.Option
 
 // WithTools returns a copy of the model with the provided tool definitions.
 func (m *Model) WithTools(tools []*schema.ToolInfo) (model.ToolCallingChatModel, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	next := &Model{
-		turns:  cloneTurns(m.turns),
-		replay: m.replay,
-		tools:  append([]*schema.ToolInfo(nil), tools...),
-		calls:  m.calls,
+		state: m.state,
+		tools: append([]*schema.ToolInfo(nil), tools...),
 	}
 	return next, nil
 }
 
 // Calls returns the number of Generate or Stream calls made against the model.
 func (m *Model) Calls() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.calls
+	m.state.mu.Lock()
+	defer m.state.mu.Unlock()
+	return m.state.calls
 }
 
 // Tools returns the tools bound through WithTools.
 func (m *Model) Tools() []*schema.ToolInfo {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	return append([]*schema.ToolInfo(nil), m.tools...)
 }
 
 func (m *Model) nextTurn() ([]*schema.Message, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.state.mu.Lock()
+	defer m.state.mu.Unlock()
 
-	if len(m.turns) == 0 {
+	if len(m.state.turns) == 0 {
 		return nil, fmt.Errorf("testmodel: no scripted turns remain")
 	}
 
 	var turn []*schema.Message
-	if m.replay {
-		turn = m.turns[0]
+	if m.state.replay {
+		turn = m.state.turns[0]
 	} else {
-		turn = m.turns[0]
-		m.turns = m.turns[1:]
+		turn = m.state.turns[0]
+		m.state.turns = m.state.turns[1:]
 	}
-	m.calls++
+	m.state.calls++
 	return cloneMessages(turn), nil
 }
 
@@ -131,12 +128,32 @@ func cloneMessages(messages []*schema.Message) []*schema.Message {
 			}
 		}
 		if msg.AssistantGenMultiContent != nil {
-			next.AssistantGenMultiContent = append([]schema.MessageOutputPart(nil), msg.AssistantGenMultiContent...)
+			next.AssistantGenMultiContent = cloneOutputParts(msg.AssistantGenMultiContent)
 		}
 		if msg.Extra != nil {
 			next.Extra = cloneMap(msg.Extra)
 		}
 		cloned[i] = &next
+	}
+	return cloned
+}
+
+func cloneOutputParts(parts []schema.MessageOutputPart) []schema.MessageOutputPart {
+	cloned := make([]schema.MessageOutputPart, len(parts))
+	for i, part := range parts {
+		next := part
+		if part.Reasoning != nil {
+			reasoning := *part.Reasoning
+			next.Reasoning = &reasoning
+		}
+		if part.StreamingMeta != nil {
+			meta := *part.StreamingMeta
+			next.StreamingMeta = &meta
+		}
+		if part.Extra != nil {
+			next.Extra = cloneMap(part.Extra)
+		}
+		cloned[i] = next
 	}
 	return cloned
 }
