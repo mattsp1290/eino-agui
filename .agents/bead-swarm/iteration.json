@@ -1,0 +1,11 @@
+{
+  "iteration": 9,
+  "branch": "bead-swarm/iteration-9-golden-sse-fixtures",
+  "slug": "golden-sse-fixtures",
+  "main_branch": "main",
+  "main_branch_source": "default",
+  "selected_beads": ["eino-agui-kw1.10"],
+  "beads_done_pending_close": [],
+  "beads_blocked": [],
+  "beads_partial": []
+}
