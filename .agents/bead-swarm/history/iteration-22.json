@@ -1,0 +1,45 @@
+{
+  "schema_version": "bead-swarm-history-v1",
+  "iteration": 22,
+  "branch": "bead-swarm/iteration-22-ci-build-vet-lint-test",
+  "slug": "ci-build-vet-lint-test",
+  "main_branch": "main",
+  "main_branch_source": "default",
+  "execution_mode": "parent-degraded",
+  "degraded_reason": "Nested orchestrator subagent could not access reviewer subagent tooling; parent executed one selected bead and used two parent-spawned Codex reviewer subagents.",
+  "selected_beads": ["eino-agui-kw1.6"],
+  "beads_done": ["eino-agui-kw1.6"],
+  "beads_blocked": [],
+  "beads_partial": [],
+  "merge_target": "main",
+  "validation": [
+    "go install golang.org/x/tools/cmd/goimports@v0.47.0: pass",
+    "go build ./...: pass",
+    "make check: pass",
+    "go test ./...: pass",
+    "go test ./... -run Parity -count=1: pass",
+    "go test -race ./...: pass",
+    "go mod tidy -diff: pass",
+    "git diff --check: pass"
+  ],
+  "review_mode": "reviewer-subagents",
+  "review_assurance": "normal",
+  "findings_fixed_re_reviewed": true,
+  "review_artifacts_local_only": true,
+  "review_blocker_summary": [
+    "ci-actions-reliability-reviewer found goimports@latest made the CI gate non-reproducible; fixed in 1587931 by pinning goimports to v0.47.0 and follow-up reviewed as resolved."
+  ],
+  "reviews": [
+    {
+      "reviewer": "ci-coverage-reviewer",
+      "verdict": "PASS",
+      "artifact": "reviews/bead-swarm-iteration-22-ci-build-vet-lint-test-2026-06-26/ci-coverage-reviewer/01-findings.md"
+    },
+    {
+      "reviewer": "ci-actions-reliability-reviewer",
+      "verdict": "PASS_AFTER_FIX",
+      "artifact": "reviews/bead-swarm-iteration-22-ci-build-vet-lint-test-2026-06-26/ci-actions-reliability-reviewer/05-followup.md"
+    }
+  ],
+  "status": "complete"
+}
