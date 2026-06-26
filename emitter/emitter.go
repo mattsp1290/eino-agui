@@ -46,9 +46,9 @@ func (e *Emitter) Err() error { return e.err }
 // errors drop the malformed event but do not stop later writes.
 func (e *Emitter) EncErr() error { return e.encErr }
 
-func (e *Emitter) write(ev events.Event) {
+func (e *Emitter) write(ev events.Event) bool {
 	if e.err != nil {
-		return
+		return false
 	}
 	if err := e.sse.WriteEvent(e.ctx, e.w, ev); err != nil {
 		if isTransportError(err) {
@@ -56,12 +56,14 @@ func (e *Emitter) write(ev events.Event) {
 			if e.cancel != nil {
 				e.cancel()
 			}
-			return
+			return false
 		}
 		if e.encErr == nil {
 			e.encErr = err
 		}
+		return false
 	}
+	return true
 }
 
 func isTransportError(err error) bool {
@@ -99,9 +101,8 @@ func (e *Emitter) StepFinished(name string) { e.write(events.NewStepFinishedEven
 
 // TextStart emits TEXT_MESSAGE_START with assistant role.
 func (e *Emitter) TextStart(id string) {
-	encErr := e.encErr
-	e.write(events.NewTextMessageStartEvent(id, events.WithRole("assistant")))
-	if id != "" && e.err == nil && e.encErr == encErr {
+	wrote := e.write(events.NewTextMessageStartEvent(id, events.WithRole("assistant")))
+	if id != "" && wrote {
 		e.openTextID = id
 	}
 }
@@ -127,9 +128,8 @@ func (e *Emitter) ReasoningStart(id string) { e.write(events.NewReasoningStartEv
 
 // ReasoningMessageStart emits REASONING_MESSAGE_START with assistant role.
 func (e *Emitter) ReasoningMessageStart(id string) {
-	encErr := e.encErr
-	e.write(events.NewReasoningMessageStartEvent(id, "assistant"))
-	if id != "" && e.err == nil && e.encErr == encErr {
+	wrote := e.write(events.NewReasoningMessageStartEvent(id, "assistant"))
+	if id != "" && wrote {
 		e.openReasoningMessageID = id
 	}
 }

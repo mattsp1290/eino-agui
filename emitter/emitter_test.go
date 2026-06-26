@@ -13,6 +13,7 @@ import (
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/encoding/sse"
+
 	"github.com/mattsp1290/eino-agui/internal/golden"
 	"github.com/mattsp1290/eino-agui/internal/testsse"
 )

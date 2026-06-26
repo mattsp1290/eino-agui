@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/cloudwego/eino/schema"
+
 	"github.com/mattsp1290/eino-agui/emitter"
 	"github.com/mattsp1290/eino-agui/internal/golden"
 	"github.com/mattsp1290/eino-agui/internal/testids"
