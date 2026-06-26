@@ -1,0 +1,40 @@
+{
+  "schema_version": "bead-swarm-history-v1",
+  "iteration": 3,
+  "branch": "bead-swarm/iteration-3-ensemble-shared-surface",
+  "slug": "ensemble-shared-surface",
+  "main_branch": "main",
+  "main_branch_source": "default",
+  "execution_mode": "parent-degraded",
+  "degraded_reason": "Nested orchestrator subagent could not access reviewer subagent tooling; parent executed one selected bead and used two parent-spawned Codex reviewer subagents.",
+  "selected_beads": ["eino-agui-kw1.2"],
+  "beads_done": ["eino-agui-kw1.2"],
+  "beads_blocked": [],
+  "beads_partial": [],
+  "merge_target": "main",
+  "validation": [
+    "git diff --check: pass",
+    "rg required ensemble repo, negative AG-UI import, function comparison, supersedes-assumptions, and downstream bead-impact evidence in docs/decisions/0002-ensemble-shared-surface.md: pass",
+    "go test ./internal/worker/agent ./internal/obs ./internal/dispatcher in /Users/punk1290/git/ensemble: pass",
+    "go test ./internal/agent in /Users/punk1290/git/ag-ui-go-server-example: pass"
+  ],
+  "review_mode": "reviewer-subagents",
+  "review_assurance": "normal",
+  "findings_fixed_re_reviewed": true,
+  "review_artifacts_local_only": true,
+  "review_blocker_summary": [],
+  "reviews": [
+    {
+      "reviewer": "surface-facts-auditor",
+      "verdict": "APPROVE",
+      "artifact": "reviews/bead-swarm-iteration-3-ensemble-shared-surface-2026-06-26/surface-facts-auditor/04-action-items.md"
+    },
+    {
+      "reviewer": "scope-risk-reviewer",
+      "verdict": "REQUEST_CHANGES",
+      "artifact": "reviews/bead-swarm-iteration-3-ensemble-shared-surface-2026-06-26/scope-risk-reviewer/04-action-items.md",
+      "resolution": "All three Important findings fixed in commit 516e2e3 and approved in reviews/bead-swarm-iteration-3-ensemble-shared-surface-2026-06-26/scope-risk-reviewer/fixes.md."
+    }
+  ],
+  "status": "complete"
+}
