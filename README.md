@@ -27,11 +27,13 @@ go mod edit -replace github.com/mattsp1290/eino-agui=/path/to/eino-agui
 go get github.com/mattsp1290/eino-agui
 ```
 
-Remove the replacement before depending on a published version:
+Remove the replacement before depending on a published version. Until the first
+semver tag is cut, use an explicit commit SHA or Go pseudo-version instead of
+`@latest`:
 
 ```bash
 go mod edit -dropreplace github.com/mattsp1290/eino-agui
-go get github.com/mattsp1290/eino-agui@<version>
+go get github.com/mattsp1290/eino-agui@<tag-or-commit>
 ```
 
 ## Version Expectations
@@ -63,6 +65,15 @@ HTTP or test output writer in `*bufio.Writer` and providing the SDK
 See [examples/stream](examples/stream) for a minimal runnable example that
 streams a deterministic eino model into AG-UI SSE events.
 
+Run the example as a local smoke test:
+
+```bash
+go run ./examples/stream
+```
+
+It writes AG-UI SSE frames to stdout and the final concatenated assistant
+content to stderr.
+
 ## Local Checks
 
 Install `goimports` once:
@@ -91,4 +102,4 @@ go test ./... -run Parity -count=1
 
 - `gofmt`/`goimports` format checks
 - `go vet ./...`
-- `golangci-lint run ./...` pinned to `v2.12.2`
+- `golangci-lint run ./...` through `go run`, pinned to `v2.12.2`
