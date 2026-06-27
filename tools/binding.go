@@ -9,8 +9,25 @@ import (
 	"github.com/eino-contrib/jsonschema"
 )
 
+// SchemaOption configures JSON Schema conversion for client tool binding.
+type SchemaOption func(*schemaConfig)
+
+type schemaConfig struct {
+	allowUnsupportedKeywords bool
+}
+
+// WithUnsupportedSchemaKeywords allows JSON Schema keywords that eino's
+// jsonschema package does not model. Unsupported keywords are dropped by the
+// conversion, matching callers that prefer best-effort tool binding over
+// rejecting a client tool definition.
+func WithUnsupportedSchemaKeywords() SchemaOption {
+	return func(cfg *schemaConfig) {
+		cfg.allowUnsupportedKeywords = true
+	}
+}
+
 // ClientToolInfos converts AG-UI client tool definitions into eino ToolInfos.
-func ClientToolInfos(tools []aguitypes.Tool) ([]*schema.ToolInfo, error) {
+func ClientToolInfos(tools []aguitypes.Tool, opts ...SchemaOption) ([]*schema.ToolInfo, error) {
 	out := make([]*schema.ToolInfo, 0, len(tools))
 	seen := make(map[string]bool, len(tools))
 	for _, tool := range tools {
@@ -23,7 +40,7 @@ func ClientToolInfos(tools []aguitypes.Tool) ([]*schema.ToolInfo, error) {
 		seen[tool.Name] = true
 
 		info := &schema.ToolInfo{Name: tool.Name, Desc: tool.Description}
-		params, err := ToJSONSchema(tool.Parameters)
+		params, err := ToJSONSchema(tool.Parameters, opts...)
 		if err != nil {
 			return nil, fmt.Errorf("tool %q parameters: %w", tool.Name, err)
 		}
@@ -37,9 +54,13 @@ func ClientToolInfos(tools []aguitypes.Tool) ([]*schema.ToolInfo, error) {
 
 // ToJSONSchema converts client-supplied JSON Schema data into eino's JSON
 // schema type. Nil and JSON null mean the tool takes no arguments.
-func ToJSONSchema(params any) (*jsonschema.Schema, error) {
+func ToJSONSchema(params any, opts ...SchemaOption) (*jsonschema.Schema, error) {
 	if params == nil {
 		return nil, nil
+	}
+	cfg := schemaConfig{}
+	for _, opt := range opts {
+		opt(&cfg)
 	}
 	data, err := json.Marshal(params)
 	if err != nil {
@@ -52,8 +73,10 @@ func ToJSONSchema(params any) (*jsonschema.Schema, error) {
 	if err := json.Unmarshal(data, &schema); err != nil {
 		return nil, fmt.Errorf("not a valid JSON Schema: %w", err)
 	}
-	if err := rejectUnsupportedSchemaKeywords(data, &schema); err != nil {
-		return nil, err
+	if !cfg.allowUnsupportedKeywords {
+		if err := rejectUnsupportedSchemaKeywords(data, &schema); err != nil {
+			return nil, err
+		}
 	}
 	return &schema, nil
 }
