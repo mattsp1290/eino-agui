@@ -1,0 +1,66 @@
+{
+  "schema_version": "bead-swarm-history-v1",
+  "iteration": 26,
+  "branch": "bead-swarm/iteration-26-tag-semver-release",
+  "slug": "tag-semver-release",
+  "main_branch": "main",
+  "main_branch_source": "default",
+  "execution_mode": "parent-degraded",
+  "degraded_reason": "Release tag iteration required no code changes; parent executed validation and subagent review directly.",
+  "selected_beads": ["eino-agui-kw1.28"],
+  "beads_done": ["eino-agui-kw1.28"],
+  "beads_blocked": [],
+  "beads_partial": [],
+  "merge_target": "main",
+  "release": {
+    "tag": "v0.1.0",
+    "target_commit_before_history": "b214b14bce2cda0746b47b04fb2d90944df99a1e",
+    "tagged_commit": null,
+    "remote_ci": [
+      {
+        "workflow": "Parity",
+        "run_id": 28272120079,
+        "head_sha": "b214b14bce2cda0746b47b04fb2d90944df99a1e",
+        "conclusion": "success",
+        "url": "https://github.com/mattsp1290/eino-agui/actions/runs/28272120079"
+      },
+      {
+        "workflow": "CI",
+        "run_id": 28272120113,
+        "head_sha": "b214b14bce2cda0746b47b04fb2d90944df99a1e",
+        "conclusion": "success",
+        "url": "https://github.com/mattsp1290/eino-agui/actions/runs/28272120113"
+      }
+    ]
+  },
+  "validation": [
+    "gh run view 28272120113 --json status,conclusion,url,headSha,displayTitle,event,workflowName: passed (CI success for b214b14bce2cda0746b47b04fb2d90944df99a1e)",
+    "gh run list --branch main --limit 5 --json databaseId,workflowName,status,conclusion,headSha,displayTitle,url: passed (CI and Parity success for b214b14bce2cda0746b47b04fb2d90944df99a1e)",
+    "go build ./...: passed",
+    "make check: passed",
+    "go test ./...: passed",
+    "go test ./... -run Parity -count=1: passed",
+    "go test -race ./...: passed",
+    "go mod tidy -diff: passed",
+    "git diff --check: passed",
+    "go run ./examples/stream: passed"
+  ],
+  "review_mode": "reviewer-subagents",
+  "review_assurance": "normal",
+  "findings_fixed_re_reviewed": true,
+  "review_artifacts_local_only": true,
+  "review_blocker_summary": [],
+  "reviews": [
+    {
+      "reviewer": "release-readiness",
+      "verdict": "APPROVE",
+      "artifact": "reviews/bead-swarm-iteration-26-tag-semver-release/release-readiness/04-action-items.md"
+    },
+    {
+      "reviewer": "tag-integrity",
+      "verdict": "APPROVE",
+      "artifact": "reviews/bead-swarm-iteration-26-tag-semver-release/tag-integrity/04-action-items.md"
+    }
+  ],
+  "status": "complete"
+}
