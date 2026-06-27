@@ -147,6 +147,39 @@ func TestToJSONSchemaRejectsUnsupportedKeywords(t *testing.T) {
 	}
 }
 
+func TestToJSONSchemaAllowsUnsupportedKeywordsWhenRequested(t *testing.T) {
+	schema, err := ToJSONSchema(map[string]any{
+		"type":       "object",
+		"x-provider": "metadata",
+	}, WithUnsupportedSchemaKeywords())
+	if err != nil {
+		t.Fatalf("ToJSONSchema() error = %v", err)
+	}
+	if schema == nil {
+		t.Fatal("ToJSONSchema() = nil, want schema")
+	}
+}
+
+func TestClientToolInfosAllowsUnsupportedKeywordsWhenRequested(t *testing.T) {
+	infos, err := ClientToolInfos([]aguitypes.Tool{{
+		Name:        "lookup_weather",
+		Description: "Read weather from the browser client",
+		Parameters: map[string]any{
+			"type":       "object",
+			"x-provider": "metadata",
+		},
+	}}, WithUnsupportedSchemaKeywords())
+	if err != nil {
+		t.Fatalf("ClientToolInfos() error = %v", err)
+	}
+	if got, want := len(infos), 1; got != want {
+		t.Fatalf("len(infos) = %d, want %d", got, want)
+	}
+	if infos[0].ParamsOneOf == nil {
+		t.Fatal("ParamsOneOf = nil, want JSON schema params")
+	}
+}
+
 func TestToJSONSchemaMalformedInputDoesNotPanic(t *testing.T) {
 	tests := []struct {
 		name string
