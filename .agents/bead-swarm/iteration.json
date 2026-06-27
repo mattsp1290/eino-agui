@@ -1,0 +1,16 @@
+{
+  "iteration": 26,
+  "branch": "bead-swarm/iteration-26-tag-semver-release",
+  "slug": "tag-semver-release",
+  "main_branch": "main",
+  "main_branch_source": "default",
+  "selected_beads": ["eino-agui-kw1.28"],
+  "beads_done_pending_close": [],
+  "beads_blocked": [],
+  "beads_partial": [],
+  "release": {
+    "tag": "v0.1.0",
+    "base_commit": "b214b14bce2cda0746b47b04fb2d90944df99a1e",
+    "reason": "First semantic-versioned release after CI, parity, README, example, and architecture documentation landed on main."
+  }
+}
