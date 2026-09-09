@@ -4,10 +4,13 @@ import (
 	"encoding/json"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/cloudwego/eino/schema"
+
+	"github.com/mattsp1290/eino-agui/internal/protocolmeta"
 
 	"github.com/mattsp1290/eino-agui/internal/testids"
 )
@@ -177,6 +180,95 @@ func TestToEinoMessagesMapsRolesAndToolCalls(t *testing.T) {
 	}
 	if got[3].Role != schema.Tool || got[3].ToolCallID != "tool-1" || got[3].Content != "result" {
 		t.Fatalf("tool message = %#v", got[3])
+	}
+}
+
+func TestMessageAndToolCallProtocolEnvelopeRoundTrip(t *testing.T) {
+	type labels []string
+	typedLabels := labels{"one"}
+	encrypted := "cipher"
+	input := types.Message{
+		Role:          types.RoleAssistant,
+		Content:       "answer",
+		Metadata:      types.Metadata{"nested": map[string]any{"items": []any{"one"}}, "labels": typedLabels},
+		SubagentRunID: "sub-1",
+		ToolCalls: []types.ToolCall{{
+			ID: "call-1", Type: types.ToolCallTypeFunction,
+			Function:       types.FunctionCall{Name: "lookup", Arguments: "{}"},
+			Metadata:       types.Metadata{"source": "client"},
+			EncryptedValue: &encrypted,
+		}},
+	}
+	eino := ToEinoMessages([]types.Message{input})
+	if len(eino) != 1 || eino[0].Extra[protocolmeta.ExtraKey] == nil {
+		t.Fatalf("Eino envelope = %#v", eino)
+	}
+	got := ToAGUIMessages(eino)
+	if len(got) != 1 || !reflect.DeepEqual(got[0].Metadata, input.Metadata) || got[0].SubagentRunID != "sub-1" {
+		t.Fatalf("message round trip = %#v", got)
+	}
+	if len(got[0].ToolCalls) != 1 || !reflect.DeepEqual(got[0].ToolCalls[0].Metadata, input.ToolCalls[0].Metadata) || got[0].ToolCalls[0].EncryptedValue == nil || *got[0].ToolCalls[0].EncryptedValue != encrypted {
+		t.Fatalf("tool-call round trip = %#v", got[0].ToolCalls)
+	}
+
+	got[0].Metadata["nested"].(map[string]any)["items"].([]any)[0] = "changed"
+	got[0].Metadata["labels"].(labels)[0] = "changed"
+	*got[0].ToolCalls[0].EncryptedValue = "changed"
+	if input.Metadata["nested"].(map[string]any)["items"].([]any)[0] != "one" || typedLabels[0] != "one" || encrypted != "cipher" {
+		t.Fatal("round-trip output aliases caller input")
+	}
+}
+
+func TestProtocolEnvelopePreservesProviderExtraAndIgnoresCollisions(t *testing.T) {
+	message := &schema.Message{Role: schema.Assistant, Content: "answer", Extra: map[string]any{
+		"provider":            "kept",
+		protocolmeta.ExtraKey: "wrong shape",
+	}}
+	got := ToAGUIMessages([]*schema.Message{message})
+	if got[0].Metadata != nil || got[0].SubagentRunID != "" {
+		t.Fatalf("wrong-shaped envelope was consumed: %#v", got[0])
+	}
+
+	input := types.Message{Role: types.RoleUser, Content: "hello", Metadata: types.Metadata{}}
+	eino := ToEinoMessages([]types.Message{input})[0]
+	if _, ok := eino.Extra[protocolmeta.ExtraKey]; !ok {
+		t.Fatal("explicit empty metadata was not retained")
+	}
+	if eino.Extra["provider"] != nil {
+		t.Fatal("unexpected provider key")
+	}
+}
+
+func TestExplicitEmptySubagentRunIDNormalizesToAbsence(t *testing.T) {
+	var input types.Message
+	if err := json.Unmarshal([]byte(`{"id":"msg-1","role":"assistant","content":"ok","subagentRunId":""}`), &input); err != nil {
+		t.Fatalf("decode message: %v", err)
+	}
+	got := ToAGUIMessages(ToEinoMessages([]types.Message{input}))
+	encoded, err := json.Marshal(got[0])
+	if err != nil {
+		t.Fatalf("encode normalized message: %v", err)
+	}
+	if strings.Contains(string(encoded), "subagentRunId") {
+		t.Fatalf("explicit empty subagentRunId survived normalization: %s", encoded)
+	}
+}
+
+func TestToolCallEnvelopePreservesEmptyVersusAbsent(t *testing.T) {
+	empty := ""
+	calls := ToEinoToolCalls([]types.ToolCall{
+		{ID: "absent", Type: types.ToolCallTypeFunction, Function: types.FunctionCall{Name: "one"}},
+		{ID: "empty", Type: types.ToolCallTypeFunction, Function: types.FunctionCall{Name: "two"}, Metadata: types.Metadata{}, EncryptedValue: &empty},
+	})
+	if calls[0].Extra != nil {
+		t.Fatalf("absent envelope = %#v", calls[0].Extra)
+	}
+	got := ToAGUIToolCalls(calls)
+	if got[0].Metadata != nil || got[0].EncryptedValue != nil {
+		t.Fatalf("absent values = %#v", got[0])
+	}
+	if got[1].Metadata == nil || got[1].EncryptedValue == nil || *got[1].EncryptedValue != "" {
+		t.Fatalf("explicit empty values = %#v", got[1])
 	}
 }
 

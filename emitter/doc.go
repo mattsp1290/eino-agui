@@ -4,5 +4,7 @@
 // NewEmitter binds the caller-provided *bufio.Writer, AG-UI *sse.SSEWriter,
 // thread/run IDs, and optional context.CancelFunc. The constructor deliberately
 // does not accept a generic io.Writer: callers own wrapping their transport into
-// the concrete buffered writer pair used by the AG-UI SDK.
+// the concrete buffered writer pair used by the AG-UI SDK. Typed helpers and
+// caller-built events sent through Emit share one error-classification path.
+// Calls must be serialized by the caller.
 package emitter

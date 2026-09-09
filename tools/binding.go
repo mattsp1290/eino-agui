@@ -7,6 +7,8 @@ import (
 	aguitypes "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/cloudwego/eino/schema"
 	"github.com/eino-contrib/jsonschema"
+
+	"github.com/mattsp1290/eino-agui/internal/protocolmeta"
 )
 
 // SchemaOption configures JSON Schema conversion for client tool binding.
@@ -40,6 +42,11 @@ func ClientToolInfos(tools []aguitypes.Tool, opts ...SchemaOption) ([]*schema.To
 		seen[tool.Name] = true
 
 		info := &schema.ToolInfo{Name: tool.Name, Desc: tool.Description}
+		if tool.Metadata != nil {
+			info.Extra = map[string]any{
+				protocolmeta.ExtraKey: map[string]any{"metadata": protocolmeta.CloneMetadata(tool.Metadata)},
+			}
+		}
 		params, err := ToJSONSchema(tool.Parameters, opts...)
 		if err != nil {
 			return nil, fmt.Errorf("tool %q parameters: %w", tool.Name, err)

@@ -26,12 +26,13 @@ type Frame struct {
 func NormalizeSSE(raw []byte) ([]Frame, error) {
 	chunks := bytes.Split(raw, []byte("\n\n"))
 	frames := make([]Frame, 0, len(chunks))
+	state := newNormalizationState()
 	for _, chunk := range chunks {
 		chunk = bytes.TrimSpace(chunk)
 		if len(chunk) == 0 {
 			continue
 		}
-		frame, err := parseFrame(chunk)
+		frame, err := parseFrame(chunk, state)
 		if err != nil {
 			return nil, err
 		}
@@ -40,7 +41,7 @@ func NormalizeSSE(raw []byte) ([]Frame, error) {
 	return frames, nil
 }
 
-func parseFrame(chunk []byte) (Frame, error) {
+func parseFrame(chunk []byte, state *normalizationState) (Frame, error) {
 	var frame Frame
 	for _, line := range bytes.Split(chunk, []byte("\n")) {
 		key, value, ok := strings.Cut(string(line), ":")
@@ -58,7 +59,7 @@ func parseFrame(chunk []byte) (Frame, error) {
 			if err := json.Unmarshal([]byte(value), &data); err != nil {
 				return Frame{}, fmt.Errorf("golden: decode data line: %w", err)
 			}
-			normalized := NormalizeValue(data)
+			normalized := state.normalizeValue(data)
 			var ok bool
 			frame.Data, ok = normalized.(map[string]any)
 			if !ok {
@@ -76,17 +77,29 @@ func parseFrame(chunk []byte) (Frame, error) {
 
 // NormalizeValue recursively masks runtime-minted values in decoded fixture data.
 func NormalizeValue(value any) any {
+	return newNormalizationState().normalizeValue(value)
+}
+
+type normalizationState struct {
+	messageIDs map[string]string
+}
+
+func newNormalizationState() *normalizationState {
+	return &normalizationState{messageIDs: make(map[string]string)}
+}
+
+func (s *normalizationState) normalizeValue(value any) any {
 	switch v := value.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(v))
 		for key, child := range v {
-			out[key] = normalizeField(key, child)
+			out[key] = s.normalizeField(key, child)
 		}
 		return out
 	case []any:
 		out := make([]any, len(v))
 		for i := range v {
-			out[i] = NormalizeValue(v[i])
+			out[i] = s.normalizeValue(v[i])
 		}
 		return out
 	default:
@@ -94,20 +107,32 @@ func NormalizeValue(value any) any {
 	}
 }
 
-func normalizeField(key string, value any) any {
+func (s *normalizationState) normalizeField(key string, value any) any {
 	switch key {
 	case "timestamp":
 		return TimestampPlaceholder
-	case "messageId":
+	case "messageId", "parentMessageId":
 		if shouldMaskString(value) {
-			return MessageIDPlaceholder
+			return s.messageID(value.(string))
 		}
 	case "id":
 		if shouldMaskString(value) {
-			return MessageIDPlaceholder
+			return s.messageID(value.(string))
 		}
 	}
-	return NormalizeValue(value)
+	return s.normalizeValue(value)
+}
+
+func (s *normalizationState) messageID(id string) string {
+	if placeholder, ok := s.messageIDs[id]; ok {
+		return placeholder
+	}
+	placeholder := MessageIDPlaceholder
+	if len(s.messageIDs) > 0 {
+		placeholder = fmt.Sprintf("<message-id-%d>", len(s.messageIDs)+1)
+	}
+	s.messageIDs[id] = placeholder
+	return placeholder
 }
 
 func shouldMaskString(value any) bool {
@@ -117,7 +142,8 @@ func shouldMaskString(value any) bool {
 	}
 	return strings.HasPrefix(s, "msg-") ||
 		strings.HasPrefix(s, "golden-msg-") ||
-		strings.HasPrefix(s, "fixture-msg-")
+		strings.HasPrefix(s, "fixture-msg-") ||
+		strings.Contains(s, "-msg-")
 }
 
 // FrameTypes returns the normalized event type sequence.

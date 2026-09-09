@@ -32,6 +32,22 @@ func TestNormalizeSSEMasksRuntimeFields(t *testing.T) {
 	}
 }
 
+func TestNormalizeSSEPreservesMessageIdentityRelationships(t *testing.T) {
+	raw := []byte("data: {\"type\":\"TEXT_MESSAGE_START\",\"messageId\":\"stream-msg-000001\"}\n\n" +
+		"data: {\"type\":\"TOOL_CALL_START\",\"parentMessageId\":\"stream-msg-000001\"}\n\n" +
+		"data: {\"type\":\"TEXT_MESSAGE_START\",\"messageId\":\"stream-msg-000002\"}\n\n")
+	frames, err := NormalizeSSE(raw)
+	if err != nil {
+		t.Fatalf("NormalizeSSE: %v", err)
+	}
+	if frames[0].Data["messageId"] != frames[1].Data["parentMessageId"] {
+		t.Fatalf("parent relationship lost: %#v", frames)
+	}
+	if frames[0].Data["messageId"] == frames[2].Data["messageId"] {
+		t.Fatalf("distinct message IDs collapsed: %#v", frames)
+	}
+}
+
 func TestFrameHelpers(t *testing.T) {
 	frames := []Frame{
 		{Data: map[string]any{"type": "TEXT_MESSAGE_START"}},
@@ -70,6 +86,10 @@ func TestGoldenFixtureFilesAreNormalized(t *testing.T) {
 			t.Fatalf("%s missing unit", path)
 		}
 		units[unit] = true
+		source, ok := fixture["source"].(map[string]any)
+		if !ok || source["repository"] != "github.com/mattsp1290/ag-ui" || source["commit"] != "aaa75b54d572be8cd1d51c72e951273c5b893ed0" {
+			t.Fatalf("%s has stale source provenance: %#v", path, source)
+		}
 		assertNoUnmaskedRuntimeValues(t, path, fixture)
 	}
 	for _, unit := range []string{"convert", "emitter", "streamTurn", "toolBinding"} {
@@ -107,6 +127,9 @@ func TestGoldenFixtureContracts(t *testing.T) {
 	}
 	if got, want := CountType(streamFrames, "TOOL_CALL_START"), 1; got != want {
 		t.Fatalf("TOOL_CALL_START count = %d, want %d", got, want)
+	}
+	if got, want := streamFrames[13].Data["parentMessageId"], MessageIDPlaceholder; got != want {
+		t.Fatalf("TOOL_CALL_START parentMessageId = %q, want %q", got, want)
 	}
 	if got, want := streamFrames[14].Data["delta"], "{\"city\":"; got != want {
 		t.Fatalf("buffered first tool args delta = %q, want %q", got, want)

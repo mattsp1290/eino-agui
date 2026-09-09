@@ -7,6 +7,8 @@ import (
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/cloudwego/eino/schema"
+
+	"github.com/mattsp1290/eino-agui/internal/protocolmeta"
 )
 
 // EinoOption configures AG-UI to eino message conversion.
@@ -42,22 +44,22 @@ func ToEinoMessages(in []types.Message, opts ...EinoOption) []*schema.Message {
 					out = append(out, msg)
 				}
 			} else if text := MessageText(m); text != "" {
-				out = append(out, schema.UserMessage(text))
+				out = append(out, withMessageEnvelope(schema.UserMessage(text), m))
 			}
 		case types.RoleSystem, types.RoleDeveloper:
 			if text := MessageText(m); text != "" {
-				out = append(out, schema.SystemMessage(text))
+				out = append(out, withMessageEnvelope(schema.SystemMessage(text), m))
 			}
 		case types.RoleAssistant:
 			content, _ := m.ContentString()
-			out = append(out, &schema.Message{
+			out = append(out, withMessageEnvelope(&schema.Message{
 				Role:      schema.Assistant,
 				Content:   content,
 				ToolCalls: ToEinoToolCalls(m.ToolCalls),
-			})
+			}, m))
 		case types.RoleTool:
 			content, _ := m.ContentString()
-			out = append(out, schema.ToolMessage(content, m.ToolCallID))
+			out = append(out, withMessageEnvelope(schema.ToolMessage(content, m.ToolCallID), m))
 		}
 	}
 	return out
@@ -96,7 +98,7 @@ func ToEinoUserMessage(m types.Message) *schema.Message {
 		if text == "" {
 			return nil
 		}
-		return schema.UserMessage(text)
+		return withMessageEnvelope(schema.UserMessage(text), m)
 	}
 
 	var textBuf strings.Builder
@@ -130,12 +132,12 @@ func ToEinoUserMessage(m types.Message) *schema.Message {
 		return nil
 	}
 	if !hasNonText {
-		return schema.UserMessage(textBuf.String())
+		return withMessageEnvelope(schema.UserMessage(textBuf.String()), m)
 	}
-	return &schema.Message{
+	return withMessageEnvelope(&schema.Message{
 		Role:                  schema.User,
 		UserInputMultiContent: multiParts,
-	}
+	}, m)
 }
 
 // ToEinoImagePart maps an AG-UI image fragment to an eino MessageInputPart.
@@ -178,11 +180,23 @@ func ToEinoToolCalls(tcs []types.ToolCall) []schema.ToolCall {
 		if tc.ID == "" {
 			continue
 		}
-		out = append(out, schema.ToolCall{
+		call := schema.ToolCall{
 			ID:       tc.ID,
 			Type:     "function",
 			Function: schema.FunctionCall{Name: tc.Function.Name, Arguments: tc.Function.Arguments},
-		})
+		}
+		envelope := make(map[string]any)
+		if tc.Metadata != nil {
+			envelope["metadata"] = protocolmeta.CloneMetadata(tc.Metadata)
+		}
+		if tc.EncryptedValue != nil {
+			value := *tc.EncryptedValue
+			envelope["encryptedValue"] = &value
+		}
+		if len(envelope) > 0 {
+			call.Extra = map[string]any{protocolmeta.ExtraKey: envelope}
+		}
+		out = append(out, call)
 	}
 	if len(out) == 0 {
 		return nil
@@ -197,6 +211,12 @@ func ToAGUIMessages(msgs []*schema.Message) []types.Message {
 	out := make([]types.Message, 0, len(msgs))
 	for _, m := range msgs {
 		am := types.Message{ID: events.GenerateMessageID(), Content: m.Content}
+		if envelope := messageEnvelope(m.Extra); envelope != nil {
+			am.Metadata = metadataFromEnvelope(envelope)
+			if value, ok := envelope["subagentRunId"].(string); ok && value != "" {
+				am.SubagentRunID = value
+			}
+		}
 		switch m.Role {
 		case schema.System:
 			am.Role = types.RoleSystem
@@ -227,14 +247,66 @@ func ToAGUIToolCalls(tcs []schema.ToolCall) []types.ToolCall {
 		if tc.ID == "" {
 			continue
 		}
-		out = append(out, types.ToolCall{
+		call := types.ToolCall{
 			ID:       tc.ID,
 			Type:     types.ToolCallTypeFunction,
 			Function: types.FunctionCall{Name: tc.Function.Name, Arguments: tc.Function.Arguments},
-		})
+		}
+		if envelope := messageEnvelope(tc.Extra); envelope != nil {
+			call.Metadata = metadataFromEnvelope(envelope)
+			if value, ok := envelope["encryptedValue"].(*string); ok && value != nil {
+				copyValue := *value
+				call.EncryptedValue = &copyValue
+			} else if value, ok := envelope["encryptedValue"].(string); ok {
+				copyValue := value
+				call.EncryptedValue = &copyValue
+			}
+		}
+		out = append(out, call)
 	}
 	if len(out) == 0 {
 		return nil
 	}
 	return out
+}
+
+func withMessageEnvelope(msg *schema.Message, source types.Message) *schema.Message {
+	if msg == nil {
+		return nil
+	}
+	envelope := make(map[string]any)
+	if source.Metadata != nil {
+		envelope["metadata"] = protocolmeta.CloneMetadata(source.Metadata)
+	}
+	if source.SubagentRunID != "" {
+		envelope["subagentRunId"] = source.SubagentRunID
+	}
+	if len(envelope) == 0 {
+		return msg
+	}
+	msg.Extra = protocolmeta.CloneMap(msg.Extra)
+	msg.Extra[protocolmeta.ExtraKey] = envelope
+	return msg
+}
+
+func messageEnvelope(extra map[string]any) map[string]any {
+	if extra == nil {
+		return nil
+	}
+	envelope, _ := extra[protocolmeta.ExtraKey].(map[string]any)
+	return envelope
+}
+
+func metadataFromEnvelope(envelope map[string]any) types.Metadata {
+	if envelope == nil {
+		return nil
+	}
+	switch metadata := envelope["metadata"].(type) {
+	case types.Metadata:
+		return protocolmeta.CloneMetadata(metadata)
+	case map[string]any:
+		return protocolmeta.CloneMetadata(types.Metadata(metadata))
+	default:
+		return nil
+	}
 }

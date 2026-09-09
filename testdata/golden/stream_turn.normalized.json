@@ -2,10 +2,10 @@
   "unit": "streamTurn",
   "name": "reasoning-text-tool-buffering-order",
   "source": {
-    "repository": "github.com/mattsp1290/ag-ui-go-server-example",
-    "commit": "a6dd6fd896ead9a06014a8a4bed0bb6a1a6cdfb5",
+    "repository": "github.com/mattsp1290/ag-ui",
+    "commit": "aaa75b54d572be8cd1d51c72e951273c5b893ed0",
     "files": [
-      "internal/agent/loop.go"
+      "sdks/community/go/example/server/internal/agent/loop.go"
     ]
   },
   "input": {
@@ -30,7 +30,7 @@
   },
   "frames": [
     {"data": {"type": "REASONING_START", "timestamp": "<timestamp>", "messageId": "<message-id>"}},
-    {"data": {"type": "REASONING_MESSAGE_START", "timestamp": "<timestamp>", "messageId": "<message-id>", "role": "assistant"}},
+    {"data": {"type": "REASONING_MESSAGE_START", "timestamp": "<timestamp>", "messageId": "<message-id>", "role": "reasoning"}},
     {"data": {"type": "REASONING_MESSAGE_CONTENT", "timestamp": "<timestamp>", "messageId": "<message-id>", "delta": "think "}},
     {"data": {"type": "REASONING_MESSAGE_END", "timestamp": "<timestamp>", "messageId": "<message-id>"}},
     {"data": {"type": "REASONING_END", "timestamp": "<timestamp>", "messageId": "<message-id>"}},
@@ -38,11 +38,11 @@
     {"data": {"type": "TEXT_MESSAGE_CONTENT", "timestamp": "<timestamp>", "messageId": "<message-id>", "delta": "answer "}},
     {"data": {"type": "TEXT_MESSAGE_END", "timestamp": "<timestamp>", "messageId": "<message-id>"}},
     {"data": {"type": "REASONING_START", "timestamp": "<timestamp>", "messageId": "<message-id>"}},
-    {"data": {"type": "REASONING_MESSAGE_START", "timestamp": "<timestamp>", "messageId": "<message-id>", "role": "assistant"}},
+    {"data": {"type": "REASONING_MESSAGE_START", "timestamp": "<timestamp>", "messageId": "<message-id>", "role": "reasoning"}},
     {"data": {"type": "REASONING_MESSAGE_CONTENT", "timestamp": "<timestamp>", "messageId": "<message-id>", "delta": "again"}},
     {"data": {"type": "REASONING_MESSAGE_END", "timestamp": "<timestamp>", "messageId": "<message-id>"}},
     {"data": {"type": "REASONING_END", "timestamp": "<timestamp>", "messageId": "<message-id>"}},
-    {"data": {"type": "TOOL_CALL_START", "timestamp": "<timestamp>", "toolCallId": "call-weather", "toolCallName": "get_weather"}},
+    {"data": {"type": "TOOL_CALL_START", "timestamp": "<timestamp>", "toolCallId": "call-weather", "toolCallName": "get_weather", "parentMessageId": "<message-id>"}},
     {"data": {"type": "TOOL_CALL_ARGS", "timestamp": "<timestamp>", "toolCallId": "call-weather", "delta": "{\"city\":"}},
     {"data": {"type": "TOOL_CALL_ARGS", "timestamp": "<timestamp>", "toolCallId": "call-weather", "delta": "\"NYC\"}"}},
     {"data": {"type": "TOOL_CALL_END", "timestamp": "<timestamp>", "toolCallId": "call-weather"}}

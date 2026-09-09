@@ -1,15 +1,23 @@
 package stream
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"reflect"
 	"strings"
 	"testing"
 
+	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	aguitypes "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
+	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/encoding/sse"
+	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 
+	"github.com/mattsp1290/eino-agui/convert"
 	"github.com/mattsp1290/eino-agui/emitter"
 	"github.com/mattsp1290/eino-agui/internal/golden"
 	"github.com/mattsp1290/eino-agui/internal/testids"
@@ -23,18 +31,28 @@ func TestStreamTurnEmitsReasoningTextAndLiveToolCalls(t *testing.T) {
 	emit := emitter.NewEmitter(context.Background(), sink.Writer(), sink.SSEWriter(), "thread-1", "run-1", nil)
 	model := testmodel.NewReplayModel(testmodel.MixedStreamChunks())
 
-	msg, err := StreamTurn(context.Background(), emit, model, nil, WithLiveToolCallEvents(true))
+	result, err := StreamTurn(context.Background(), emit, model, nil, WithLiveToolCallEvents(true))
 	if err != nil {
 		t.Fatalf("StreamTurn: %v", err)
 	}
-	if msg.Content != "Hello world" {
-		t.Fatalf("message content = %q, want Hello world", msg.Content)
+	if result.Assistant.Content != "Hello world" {
+		t.Fatalf("message content = %q, want Hello world", result.Assistant.Content)
 	}
-	if len(msg.ToolCalls) != 1 || msg.ToolCalls[0].ID != "call-weather" {
-		t.Fatalf("message tool calls = %#v", msg.ToolCalls)
+	if len(result.Assistant.ToolCalls) != 1 || result.Assistant.ToolCalls[0].ID != "call-weather" {
+		t.Fatalf("message tool calls = %#v", result.Assistant.ToolCalls)
+	}
+	if result.Partial || result.ToolOwnerID == "" || len(result.WireMessages) != 3 {
+		t.Fatalf("stream result = %#v", result)
+	}
+	owner := result.WireMessages[2]
+	if owner.ID != result.ToolOwnerID || len(owner.ToolCalls) != 1 || owner.ToolCalls[0].ID != "call-weather" {
+		t.Fatalf("tool owner = %#v", owner)
 	}
 
 	frames := normalizedFrames(t, sink)
+	if !strings.Contains(sink.String(), `"parentMessageId":"`+result.ToolOwnerID+`"`) {
+		t.Fatalf("tool start does not reference result owner %q: %s", result.ToolOwnerID, sink.String())
+	}
 	if got, want := golden.FrameTypes(frames), []string{
 		"REASONING_START",
 		"REASONING_MESSAGE_START",
@@ -61,15 +79,15 @@ func TestStreamTurnMatchesNormalizedGoldenFixture(t *testing.T) {
 	emit := emitter.NewEmitter(context.Background(), sink.Writer(), sink.SSEWriter(), "thread-1", "run-1", nil)
 	model := testmodel.NewReplayModel(streamFixtureChunks(fixture.Input.Chunks))
 
-	msg, err := StreamTurn(context.Background(), emit, model, nil, WithLiveToolCallEvents(fixture.Input.StreamToolCalls))
+	result, err := StreamTurn(context.Background(), emit, model, nil, WithLiveToolCallEvents(fixture.Input.StreamToolCalls))
 	if err != nil {
 		t.Fatalf("StreamTurn: %v", err)
 	}
-	if msg.Content != "answer " {
-		t.Fatalf("message content = %q, want answer ", msg.Content)
+	if result.Assistant.Content != "answer " {
+		t.Fatalf("message content = %q, want answer ", result.Assistant.Content)
 	}
-	if len(msg.ToolCalls) != 1 || msg.ToolCalls[0].ID != "call-weather" {
-		t.Fatalf("message tool calls = %#v", msg.ToolCalls)
+	if len(result.Assistant.ToolCalls) != 1 || result.Assistant.ToolCalls[0].ID != "call-weather" {
+		t.Fatalf("message tool calls = %#v", result.Assistant.ToolCalls)
 	}
 
 	frames := normalizedFrames(t, sink)
@@ -88,12 +106,15 @@ func TestStreamTurnLeavesToolCallsUnemittedWhenLiveToolCallsDisabled(t *testing.
 	emit := emitter.NewEmitter(context.Background(), sink.Writer(), sink.SSEWriter(), "thread-1", "run-1", nil)
 	model := testmodel.NewReplayModel(testmodel.ToolCallChunks(0, "call-weather", "get_weather", `{"city":"NYC"}`))
 
-	msg, err := StreamTurn(context.Background(), emit, model, nil)
+	result, err := StreamTurn(context.Background(), emit, model, nil)
 	if err != nil {
 		t.Fatalf("StreamTurn: %v", err)
 	}
-	if len(msg.ToolCalls) != 1 {
-		t.Fatalf("message tool calls = %#v, want one", msg.ToolCalls)
+	if len(result.Assistant.ToolCalls) != 1 {
+		t.Fatalf("message tool calls = %#v, want one", result.Assistant.ToolCalls)
+	}
+	if result.ToolOwnerID == "" || len(result.WireMessages) != 1 || result.WireMessages[0].ID != result.ToolOwnerID || len(result.WireMessages[0].ToolCalls) != 1 {
+		t.Fatalf("disabled-live owner result = %#v", result)
 	}
 	frames := normalizedFrames(t, sink)
 	if len(frames) != 0 {
@@ -109,17 +130,17 @@ func TestStreamTurnConcatPreservesExtra(t *testing.T) {
 		{Role: schema.Assistant, Content: "world", Extra: map[string]any{"continuation": "second"}},
 	})
 
-	msg, err := StreamTurn(context.Background(), emit, model, nil)
+	result, err := StreamTurn(context.Background(), emit, model, nil)
 	if err != nil {
 		t.Fatalf("StreamTurn: %v", err)
 	}
-	if msg.Content != "hello world" {
-		t.Fatalf("message content = %q, want hello world", msg.Content)
+	if result.Assistant.Content != "hello world" {
+		t.Fatalf("message content = %q, want hello world", result.Assistant.Content)
 	}
-	if got, want := msg.Extra["reasoning"], "first"; got != want {
+	if got, want := result.Assistant.Extra["reasoning"], "first"; got != want {
 		t.Fatalf("Extra[reasoning] = %v, want %v", got, want)
 	}
-	if got, want := msg.Extra["continuation"], "second"; got != want {
+	if got, want := result.Assistant.Extra["continuation"], "second"; got != want {
 		t.Fatalf("Extra[continuation] = %v, want %v", got, want)
 	}
 }
@@ -175,6 +196,261 @@ func TestStreamTurnKeysToolCallsByIndex(t *testing.T) {
 	}
 }
 
+func TestStreamTurnDoesNotOverlapToolAndTextBlocks(t *testing.T) {
+	sink := testsse.NewSink()
+	emit := emitter.NewEmitter(context.Background(), sink.Writer(), sink.SSEWriter(), "thread-1", "run-1", nil)
+	chunks := append(testmodel.ToolCallChunks(0, "tool-1", "lookup", "{}"), testmodel.TextChunk("after"))
+	if _, err := StreamTurn(context.Background(), emit, testmodel.NewReplayModel(chunks), nil, WithLiveToolCallEvents(true)); err != nil {
+		t.Fatalf("StreamTurn: %v", err)
+	}
+	if got, want := golden.FrameTypes(normalizedFrames(t, sink)), []string{"TOOL_CALL_START", "TOOL_CALL_ARGS", "TOOL_CALL_END", "TEXT_MESSAGE_START", "TEXT_MESSAGE_CONTENT", "TEXT_MESSAGE_END"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("frame types = %v, want %v", got, want)
+	}
+}
+
+func TestStreamTurnRejectsAmbiguousToolCorrelation(t *testing.T) {
+	tests := []struct {
+		name   string
+		chunks []*schema.Message
+	}{
+		{"changed ID", []*schema.Message{toolCallChunk(0, "tool-a", "first", "{}"), toolCallChunk(0, "tool-b", "", "")}},
+		{"duplicate ID", []*schema.Message{toolCallChunk(0, "tool-a", "first", "{}"), toolCallChunk(1, "tool-a", "second", "{}")}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.chunks[0].ResponseMeta = &schema.ResponseMeta{Usage: &schema.TokenUsage{TotalTokens: 7}}
+			sink := testsse.NewSink()
+			emit := emitter.NewEmitter(context.Background(), sink.Writer(), sink.SSEWriter(), "thread-1", "run-1", nil)
+			result, err := StreamTurn(context.Background(), emit, testmodel.NewReplayModel(tt.chunks), nil, WithLiveToolCallEvents(true))
+			var correlationErr *CorrelationError
+			if !errors.As(err, &correlationErr) {
+				t.Fatalf("error = %v, want CorrelationError", err)
+			}
+			if result == nil || !result.Partial || result.ToolOwnerID == "" || result.Usage == nil || result.Usage.TotalTokens != 7 {
+				t.Fatalf("partial result = %#v", result)
+			}
+			for _, message := range result.WireMessages {
+				if len(message.ToolCalls) != 0 {
+					t.Fatalf("ambiguous calls attached to wire message: %#v", message)
+				}
+			}
+		})
+	}
+}
+
+func TestStreamTurnUsageAndNilIndexCorrelation(t *testing.T) {
+	usage := &schema.TokenUsage{PromptTokens: 3, CompletionTokens: 2, TotalTokens: 5}
+	nilIndexCall := func(id, name, args string) *schema.Message {
+		return &schema.Message{Role: schema.Assistant, ToolCalls: []schema.ToolCall{{ID: id, Type: "function", Function: schema.FunctionCall{Name: name, Arguments: args}}}}
+	}
+	chunks := []*schema.Message{
+		{Role: schema.Assistant, Content: "ok", ResponseMeta: &schema.ResponseMeta{Usage: usage}},
+		nilIndexCall("", "", "discarded"),
+		nilIndexCall("call-1", "lookup", "{"),
+		nilIndexCall("call-1", "", "}"),
+	}
+	sink := testsse.NewSink()
+	emit := emitter.NewEmitter(context.Background(), sink.Writer(), sink.SSEWriter(), "thread-1", "run-1", nil)
+	result, err := StreamTurn(context.Background(), emit, testmodel.NewReplayModel(chunks), nil, WithLiveToolCallEvents(true))
+	if err != nil {
+		t.Fatalf("StreamTurn: %v", err)
+	}
+	if result.Usage == nil || result.Usage.TotalTokens != 5 {
+		t.Fatalf("usage = %#v", result.Usage)
+	}
+	if len(result.Assistant.ToolCalls) != 1 || result.Assistant.ToolCalls[0].ID != "call-1" || result.Assistant.ToolCalls[0].Function.Arguments != "{}" {
+		t.Fatalf("assistant tool calls = %#v, want one merged call", result.Assistant.ToolCalls)
+	}
+	if len(result.WireMessages) != 2 || len(result.WireMessages[1].ToolCalls) != 1 || result.WireMessages[1].ToolCalls[0].Function.Arguments != "{}" {
+		t.Fatalf("wire messages = %#v, want one merged owner call", result.WireMessages)
+	}
+	frames := normalizedFrames(t, sink)
+	var deltas []string
+	for _, frame := range frames {
+		if frame.Data["type"] == "TOOL_CALL_ARGS" {
+			deltas = append(deltas, frame.Data["delta"].(string))
+		}
+	}
+	if !reflect.DeepEqual(deltas, []string{"{", "}"}) {
+		t.Fatalf("tool deltas = %#v, anonymous fragment was not discarded", deltas)
+	}
+}
+
+func TestStreamTurnDiscardsAnonymousOnlyToolFragmentsWithoutOwner(t *testing.T) {
+	chunk := &schema.Message{Role: schema.Assistant, ToolCalls: []schema.ToolCall{{
+		Type:     "function",
+		Function: schema.FunctionCall{Name: "ignored", Arguments: "{}"},
+	}}}
+	sink := testsse.NewSink()
+	emit := emitter.NewEmitter(context.Background(), sink.Writer(), sink.SSEWriter(), "thread-1", "run-1", nil)
+
+	result, err := StreamTurn(context.Background(), emit, testmodel.NewReplayModel([]*schema.Message{chunk}), nil, WithLiveToolCallEvents(true))
+	if err != nil {
+		t.Fatalf("StreamTurn: %v", err)
+	}
+	if result.ToolOwnerID != "" || len(result.WireMessages) != 0 || len(result.Assistant.ToolCalls) != 0 {
+		t.Fatalf("anonymous fragment leaked into result: %#v", result)
+	}
+	if frames := normalizedFrames(t, sink); len(frames) != 0 {
+		t.Fatalf("anonymous fragment emitted frames: %#v", frames)
+	}
+}
+
+func TestStreamTurnRetainsUsageAndClosesBlocksOnErrors(t *testing.T) {
+	usage := &schema.TokenUsage{TotalTokens: 8}
+	tests := []struct {
+		name      string
+		makeModel func(context.CancelFunc) model.ToolCallingChatModel
+		wantError string
+	}{
+		{
+			name: "receive error",
+			makeModel: func(context.CancelFunc) model.ToolCallingChatModel {
+				return readerModel{open: func() *schema.StreamReader[*schema.Message] {
+					reader, writer := schema.Pipe[*schema.Message](2)
+					writer.Send(&schema.Message{Role: schema.Assistant, Content: "partial", ResponseMeta: &schema.ResponseMeta{Usage: usage}}, nil)
+					writer.Send(nil, errors.New("receive failed"))
+					writer.Close()
+					return reader
+				}}
+			},
+			wantError: "receive failed",
+		},
+		{
+			name: "context cancellation",
+			makeModel: func(cancel context.CancelFunc) model.ToolCallingChatModel {
+				return readerModel{open: func() *schema.StreamReader[*schema.Message] {
+					reader := schema.StreamReaderFromArray([]*schema.Message{{Role: schema.Assistant, Content: "partial", ResponseMeta: &schema.ResponseMeta{Usage: usage}}})
+					return schema.StreamReaderWithConvert(reader, func(chunk *schema.Message) (*schema.Message, error) {
+						cancel()
+						return chunk, nil
+					})
+				}}
+			},
+			wantError: context.Canceled.Error(),
+		},
+		{
+			name: "concatenation error",
+			makeModel: func(context.CancelFunc) model.ToolCallingChatModel {
+				return testmodel.NewReplayModel([]*schema.Message{
+					{Role: schema.Assistant, Content: "partial", ResponseMeta: &schema.ResponseMeta{Usage: usage}},
+					{Role: schema.User, Content: "wrong role"},
+				})
+			},
+			wantError: "cannot concat messages",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			sink := testsse.NewSink()
+			emit := emitter.NewEmitter(context.Background(), sink.Writer(), sink.SSEWriter(), "thread-1", "run-1", nil)
+			result, err := StreamTurn(ctx, emit, tt.makeModel(cancel), nil)
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("error = %v, want containing %q", err, tt.wantError)
+			}
+			if result == nil || !result.Partial || result.Usage == nil || result.Usage.TotalTokens != 8 {
+				t.Fatalf("partial result = %#v", result)
+			}
+			frames := normalizedFrames(t, sink)
+			got := golden.FrameTypes(frames)
+			if len(got) < 3 || got[0] != "TEXT_MESSAGE_START" || got[len(got)-1] != "TEXT_MESSAGE_END" || golden.CountType(frames, "TEXT_MESSAGE_START") != 1 || golden.CountType(frames, "TEXT_MESSAGE_END") != 1 {
+				t.Fatalf("unbalanced frames = %v", got)
+			}
+		})
+	}
+}
+
+func TestStreamTurnReturnsPartialResultOnTerminalTransportError(t *testing.T) {
+	emit := emitter.NewEmitter(context.Background(), bufio.NewWriter(streamErrorWriter{}), sse.NewSSEWriter(), "thread-1", "run-1", nil)
+	model := testmodel.NewReplayModel([]*schema.Message{{
+		Role: schema.Assistant, Content: "partial",
+		ResponseMeta: &schema.ResponseMeta{Usage: &schema.TokenUsage{TotalTokens: 6}},
+	}})
+	result, err := StreamTurn(context.Background(), emit, model, nil)
+	if err == nil || emit.Err() == nil {
+		t.Fatalf("transport errors = returned %v, emitter %v", err, emit.Err())
+	}
+	if result == nil || !result.Partial || result.Usage == nil || result.Usage.TotalTokens != 6 {
+		t.Fatalf("partial result = %#v", result)
+	}
+}
+
+func TestStreamTurnWireMessagesExcludeUnwrittenContent(t *testing.T) {
+	writer := &failAfterWriter{remaining: 2}
+	emit := emitter.NewEmitter(context.Background(), bufio.NewWriter(writer), sse.NewSSEWriter(), "thread-1", "run-1", nil)
+	model := testmodel.NewReplayModel([]*schema.Message{
+		{Role: schema.Assistant, Content: "written"},
+		{Role: schema.Assistant, Content: "-not-written"},
+	})
+
+	result, err := StreamTurn(context.Background(), emit, model, nil)
+	if err == nil || emit.Err() == nil {
+		t.Fatalf("transport errors = returned %v, emitter %v", err, emit.Err())
+	}
+	if result == nil || !result.Partial {
+		t.Fatalf("partial result = %#v", result)
+	}
+	if len(result.WireMessages) != 0 {
+		t.Fatalf("wire messages include an unterminated or unwritten message: %#v", result.WireMessages)
+	}
+	frames, normalizeErr := golden.NormalizeSSE(writer.buf.Bytes())
+	if normalizeErr != nil {
+		t.Fatalf("normalize successfully written frames: %v", normalizeErr)
+	}
+	if got, want := golden.FrameTypes(frames), []string{"TEXT_MESSAGE_START", "TEXT_MESSAGE_CONTENT"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("written frame types = %v, want %v", got, want)
+	}
+}
+
+func TestStreamUsageMapsToRunEndings(t *testing.T) {
+	usageChunk := &schema.Message{Role: schema.Assistant, Content: "done", ResponseMeta: &schema.ResponseMeta{Usage: &schema.TokenUsage{PromptTokens: 5, CompletionTokens: 3, TotalTokens: 8}}}
+	tests := []struct {
+		name      string
+		model     model.ToolCallingChatModel
+		wantError bool
+		finish    func(*emitter.Emitter, aguievents.TokenUsage)
+		wantType  string
+	}{
+		{"success", testmodel.NewReplayModel([]*schema.Message{usageChunk}), false, func(e *emitter.Emitter, usage aguievents.TokenUsage) { e.RunFinishedSuccess(usage) }, "RUN_FINISHED"},
+		{"interrupt", testmodel.NewReplayModel([]*schema.Message{usageChunk}), false, func(e *emitter.Emitter, usage aguievents.TokenUsage) {
+			e.RunFinishedInterrupt([]aguitypes.Interrupt{{ID: "int-1", Reason: "approval"}}, usage)
+		}, "RUN_FINISHED"},
+		{"model receive error", readerModel{open: func() *schema.StreamReader[*schema.Message] {
+			reader, writer := schema.Pipe[*schema.Message](2)
+			writer.Send(usageChunk, nil)
+			writer.Send(nil, errors.New("model receive failed"))
+			writer.Close()
+			return reader
+		}}, true, func(e *emitter.Emitter, usage aguievents.TokenUsage) { e.RunError("model receive failed", usage) }, "RUN_ERROR"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sink := testsse.NewSink()
+			emit := emitter.NewEmitter(context.Background(), sink.Writer(), sink.SSEWriter(), "thread-1", "run-1", nil)
+			result, err := StreamTurn(context.Background(), emit, tt.model, nil)
+			if (err != nil) != tt.wantError {
+				t.Fatalf("StreamTurn error = %v, wantError %v", err, tt.wantError)
+			}
+			mapped, err := convert.ToAGUITokenUsage(result.Usage, "provider", "model")
+			if err != nil || mapped == nil {
+				t.Fatalf("mapped usage = %#v, %v", mapped, err)
+			}
+			tt.finish(emit, *mapped)
+			frames := normalizedFrames(t, sink)
+			ending := frames[len(frames)-1].Data
+			if ending["type"] != tt.wantType {
+				t.Fatalf("ending = %#v", ending)
+			}
+			wireUsage := ending["usage"].([]any)[0].(map[string]any)
+			if wireUsage["inputTokens"] != float64(5) || wireUsage["outputTokens"] != float64(3) || wireUsage["totalTokens"] != float64(8) {
+				t.Fatalf("ending usage = %#v", wireUsage)
+			}
+		})
+	}
+}
+
 func TestStreamPackageDoesNotOwnPostTurnProposalEmission(t *testing.T) {
 	data, err := os.ReadFile("stream.go")
 	if err != nil {
@@ -196,8 +472,21 @@ func TestStreamTurnEmptyStreamReturnsError(t *testing.T) {
 	emit := emitter.NewEmitter(context.Background(), sink.Writer(), sink.SSEWriter(), "thread-1", "run-1", nil)
 	model := testmodel.NewReplayModel(nil)
 
-	if _, err := StreamTurn(context.Background(), emit, model, nil); err == nil {
+	result, err := StreamTurn(context.Background(), emit, model, nil)
+	if err == nil {
 		t.Fatal("StreamTurn error is nil, want empty model stream error")
+	}
+	if result == nil || !result.Partial {
+		t.Fatalf("empty stream result = %#v, want non-nil partial", result)
+	}
+}
+
+func TestStreamTurnOpenFailureReturnsNilResult(t *testing.T) {
+	sink := testsse.NewSink()
+	emit := emitter.NewEmitter(context.Background(), sink.Writer(), sink.SSEWriter(), "thread-1", "run-1", nil)
+	result, err := StreamTurn(context.Background(), emit, testmodel.NewScriptedModel(), nil)
+	if err == nil || result != nil {
+		t.Fatalf("StreamTurn = %#v, %v; want nil,error", result, err)
 	}
 }
 
@@ -294,7 +583,7 @@ func comparableData(data map[string]any) map[string]any {
 		switch key {
 		case "timestamp":
 			continue
-		case "messageId":
+		case "messageId", "parentMessageId":
 			out[key] = golden.MessageIDPlaceholder
 		default:
 			out[key] = value
@@ -354,4 +643,35 @@ type streamFixtureChunk struct {
 		Name      string `json:"name"`
 		Arguments string `json:"arguments"`
 	} `json:"toolCalls"`
+}
+
+type readerModel struct {
+	open func() *schema.StreamReader[*schema.Message]
+}
+
+func (m readerModel) Generate(context.Context, []*schema.Message, ...model.Option) (*schema.Message, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m readerModel) Stream(context.Context, []*schema.Message, ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+	return m.open(), nil
+}
+
+func (m readerModel) WithTools([]*schema.ToolInfo) (model.ToolCallingChatModel, error) { return m, nil }
+
+type streamErrorWriter struct{}
+
+func (streamErrorWriter) Write([]byte) (int, error) { return 0, errors.New("broken pipe") }
+
+type failAfterWriter struct {
+	buf       bytes.Buffer
+	remaining int
+}
+
+func (w *failAfterWriter) Write(data []byte) (int, error) {
+	if w.remaining == 0 {
+		return 0, errors.New("broken pipe")
+	}
+	w.remaining--
+	return w.buf.Write(data)
 }
