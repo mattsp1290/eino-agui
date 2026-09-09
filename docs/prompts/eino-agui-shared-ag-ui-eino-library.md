@@ -1,4 +1,8 @@
-# Project Planning with Beads
+# Archived Project Planning Input
+
+> Historical record only. Its dependency versions, local checkout paths,
+> migration commands, and scope assumptions were superseded by the 2026-09-09
+> upgrade decisions and are not current adoption instructions.
 
 ## Agent Instructions
 

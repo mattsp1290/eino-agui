@@ -28,7 +28,7 @@ func run(ctx context.Context, out io.Writer) error {
 	model := replayModel{chunks: exampleChunks()}
 
 	emit.RunStarted()
-	msg, err := stream.StreamTurn(ctx, emit, model, nil, stream.WithLiveToolCallEvents(true))
+	result, err := stream.StreamTurn(ctx, emit, model, nil, stream.WithLiveToolCallEvents(true))
 	if err != nil {
 		emit.RunError(err.Error())
 		_ = writer.Flush()
@@ -39,7 +39,7 @@ func run(ctx context.Context, out io.Writer) error {
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "assistant content: %q\n", msg.Content)
+	fmt.Fprintf(os.Stderr, "assistant content: %q; tool owner: %s\n", result.Assistant.Content, result.ToolOwnerID)
 	return nil
 }
 

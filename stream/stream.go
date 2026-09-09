@@ -5,34 +5,47 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strconv"
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	aguitypes "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 
+	"github.com/mattsp1290/eino-agui/convert"
 	"github.com/mattsp1290/eino-agui/emitter"
 )
+
+// Result preserves both the provider-facing Eino response and the exact
+// message identities represented by the emitted AG-UI stream.
+type Result struct {
+	Assistant    *schema.Message
+	WireMessages []aguitypes.Message
+	ToolOwnerID  string
+	Usage        *schema.TokenUsage
+	Partial      bool
+}
+
+// CorrelationError reports an ambiguous streamed tool-call identity.
+type CorrelationError struct{ Message string }
+
+func (e *CorrelationError) Error() string { return "tool-call correlation: " + e.Message }
 
 // Option configures StreamTurn.
 type Option func(*config)
 
-type config struct {
-	liveToolCalls bool
-}
+type config struct{ liveToolCalls bool }
 
 // WithLiveToolCallEvents controls whether streamed model tool calls are emitted
 // live as TOOL_CALL_* events. When enabled, callers must not also emit post-turn
 // tool proposals for the same calls.
 func WithLiveToolCallEvents(enabled bool) Option {
-	return func(cfg *config) {
-		cfg.liveToolCalls = enabled
-	}
+	return func(cfg *config) { cfg.liveToolCalls = enabled }
 }
 
-// StreamTurn streams one model turn, emits AG-UI reasoning/text/tool-call
-// events as chunks arrive, and returns the concatenated assistant message.
-func StreamTurn(ctx context.Context, emit *emitter.Emitter, cm model.ToolCallingChatModel, messages []*schema.Message, opts ...Option) (*schema.Message, error) {
+// StreamTurn streams one classic Eino model turn and returns its provider
+// response together with the AG-UI wire transcript and tool-owner identity.
+// Once the model stream opens, errors return a non-nil partial Result.
+func StreamTurn(ctx context.Context, emit *emitter.Emitter, cm model.ToolCallingChatModel, messages []*schema.Message, opts ...Option) (*Result, error) {
 	cfg := config{}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -44,128 +57,204 @@ func StreamTurn(ctx context.Context, emit *emitter.Emitter, cm model.ToolCalling
 	}
 	defer sr.Close()
 
+	result := &Result{}
 	var chunks []*schema.Message
-	var textID string
-	var reasoningID string
+	var textID, textContent string
+	var reasoningID, reasoningContent string
 	textOpen, reasoningOpen := false, false
-	tcs := map[string]*toolCallBuffer{}
-	var tcOrder []string
+	toolOwnerIndex := -1
+	indexed := make(map[int]*toolCallBuffer)
+	byID := make(map[string]*toolCallBuffer)
+	var toolOrder []*toolCallBuffer
+	endToolCalls := func() {
+		if cfg.liveToolCalls {
+			for _, call := range toolOrder {
+				call.end()
+			}
+		}
+	}
 
 	closeReasoning := func() {
-		if reasoningOpen {
-			emit.ReasoningMessageEnd(reasoningID)
-			emit.ReasoningEnd(reasoningID)
-			reasoningOpen = false
+		if !reasoningOpen {
+			return
 		}
+		emit.ReasoningMessageEnd(reasoningID)
+		emit.ReasoningEnd(reasoningID)
+		result.WireMessages = append(result.WireMessages, aguitypes.Message{ID: reasoningID, Role: aguitypes.RoleReasoning, Content: reasoningContent})
+		reasoningID, reasoningContent, reasoningOpen = "", "", false
 	}
 	closeText := func() {
-		if textOpen {
-			emit.TextEnd(textID)
-			textOpen = false
+		if !textOpen {
+			return
 		}
+		emit.TextEnd(textID)
+		result.WireMessages = append(result.WireMessages, aguitypes.Message{ID: textID, Role: aguitypes.RoleAssistant, Content: textContent})
+		textID, textContent, textOpen = "", "", false
 	}
-	streamToolCallChunk := func(chunk *schema.Message) {
-		if len(chunk.ToolCalls) == 0 {
+	ensureToolOwner := func() {
+		if result.ToolOwnerID != "" {
 			return
 		}
 		closeReasoning()
 		closeText()
-		for _, tc := range chunk.ToolCalls {
-			key := toolCallKey(tc)
-			buf := tcs[key]
-			if buf == nil {
-				buf = &toolCallBuffer{emit: emit}
-				tcs[key] = buf
-				tcOrder = append(tcOrder, key)
+		result.ToolOwnerID = aguievents.GenerateMessageID()
+		toolOwnerIndex = len(result.WireMessages)
+		result.WireMessages = append(result.WireMessages, aguitypes.Message{ID: result.ToolOwnerID, Role: aguitypes.RoleAssistant, Content: ""})
+	}
+	closeBlocks := func() {
+		closeReasoning()
+		closeText()
+		endToolCalls()
+	}
+	finish := func(primary error, correlationFailed bool) (*Result, error) {
+		closeBlocks()
+		if len(chunks) == 0 {
+			result.Partial = true
+			if primary == nil {
+				primary = fmt.Errorf("empty model stream")
 			}
-			buf.update(tc.ID, tc.Function.Name, tc.Function.Arguments)
+			return result, primary
 		}
-	}
-	endStreamedToolCalls := func() {
-		closeReasoning()
-		closeText()
-		for _, key := range tcOrder {
-			tcs[key].end()
+		assistant, concatErr := schema.ConcatMessages(chunks)
+		if concatErr == nil {
+			result.Assistant = assistant
+			if correlationFailed {
+				result.Assistant.ToolCalls = nil
+			}
+		} else if primary == nil {
+			primary = concatErr
 		}
-	}
-	closeOpenBlocks := func() {
-		if cfg.liveToolCalls {
-			endStreamedToolCalls()
-			return
+		if !correlationFailed && result.Assistant != nil && toolOwnerIndex >= 0 {
+			result.WireMessages[toolOwnerIndex].ToolCalls = convert.ToAGUIToolCalls(result.Assistant.ToolCalls)
 		}
-		closeReasoning()
-		closeText()
+		result.Partial = primary != nil
+		return result, primary
 	}
-	defer closeOpenBlocks()
 
 	for {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return finish(err, false)
 		}
 		if err := emit.Err(); err != nil {
-			return nil, err
+			return finish(err, false)
 		}
 		chunk, recvErr := sr.Recv()
 		if errors.Is(recvErr, io.EOF) {
 			break
 		}
 		if recvErr != nil {
-			return nil, recvErr
+			return finish(recvErr, false)
 		}
+		chunks = append(chunks, chunk)
+		if chunk == nil {
+			continue
+		}
+		accumulateUsage(&result.Usage, chunk.ResponseMeta)
+
 		if chunk.ReasoningContent != "" {
-			if textOpen {
-				emit.TextEnd(textID)
-				textOpen = false
-			}
+			endToolCalls()
+			closeText()
 			if !reasoningOpen {
 				reasoningID = aguievents.GenerateMessageID()
 				emit.ReasoningStart(reasoningID)
 				emit.ReasoningMessageStart(reasoningID)
 				reasoningOpen = true
 			}
+			reasoningContent += chunk.ReasoningContent
 			emit.ReasoningContent(reasoningID, chunk.ReasoningContent)
 		}
 		if chunk.Content != "" {
+			endToolCalls()
 			closeReasoning()
 			if !textOpen {
 				textID = aguievents.GenerateMessageID()
 				emit.TextStart(textID)
 				textOpen = true
 			}
+			textContent += chunk.Content
 			emit.TextContent(textID, chunk.Content)
 		}
-		if cfg.liveToolCalls {
-			streamToolCallChunk(chunk)
+		if len(chunk.ToolCalls) > 0 {
+			ensureToolOwner()
+			for _, call := range chunk.ToolCalls {
+				buffer, corrErr := correlateToolCall(call, indexed, byID, emit, result.ToolOwnerID, cfg.liveToolCalls, &toolOrder)
+				if corrErr != nil {
+					return finish(corrErr, true)
+				}
+				if buffer != nil {
+					buffer.update(call.ID, call.Function.Name, call.Function.Arguments)
+				}
+			}
 		}
-		chunks = append(chunks, chunk)
 	}
-	if len(chunks) == 0 {
-		return nil, fmt.Errorf("empty model stream")
+	if err := emit.Err(); err != nil {
+		return finish(err, false)
 	}
-	return schema.ConcatMessages(chunks)
+	return finish(nil, false)
 }
 
-func toolCallKey(tc schema.ToolCall) string {
-	if tc.Index != nil {
-		return "i" + strconv.Itoa(*tc.Index)
+func correlateToolCall(call schema.ToolCall, indexed map[int]*toolCallBuffer, byID map[string]*toolCallBuffer, emit *emitter.Emitter, ownerID string, live bool, order *[]*toolCallBuffer) (*toolCallBuffer, error) {
+	if call.Index == nil && call.ID == "" {
+		return nil, nil
 	}
-	if tc.ID != "" {
-		return "d" + tc.ID
+	if call.Index != nil {
+		index := *call.Index
+		buffer := indexed[index]
+		if buffer == nil {
+			buffer = &toolCallBuffer{emit: emit, parentMessageID: ownerID, live: live, index: &index}
+			indexed[index] = buffer
+			*order = append(*order, buffer)
+		}
+		if call.ID != "" && buffer.id != "" && buffer.id != call.ID {
+			return nil, &CorrelationError{Message: fmt.Sprintf("index %d changed ID from %q to %q", index, buffer.id, call.ID)}
+		}
+		if call.ID != "" {
+			if claimed := byID[call.ID]; claimed != nil && claimed != buffer {
+				return nil, &CorrelationError{Message: fmt.Sprintf("ID %q is claimed by multiple stream entries", call.ID)}
+			}
+			byID[call.ID] = buffer
+		}
+		return buffer, nil
 	}
-	return "p0"
+
+	buffer := byID[call.ID]
+	if buffer == nil {
+		buffer = &toolCallBuffer{emit: emit, parentMessageID: ownerID, live: live}
+		byID[call.ID] = buffer
+		*order = append(*order, buffer)
+	}
+	return buffer, nil
+}
+
+func accumulateUsage(target **schema.TokenUsage, meta *schema.ResponseMeta) {
+	if meta == nil || meta.Usage == nil {
+		return
+	}
+	if *target == nil {
+		*target = &schema.TokenUsage{}
+	}
+	usage := *target
+	usage.PromptTokens = max(usage.PromptTokens, meta.Usage.PromptTokens)
+	usage.CompletionTokens = max(usage.CompletionTokens, meta.Usage.CompletionTokens)
+	usage.TotalTokens = max(usage.TotalTokens, meta.Usage.TotalTokens)
+	usage.PromptTokenDetails.CachedTokens = max(usage.PromptTokenDetails.CachedTokens, meta.Usage.PromptTokenDetails.CachedTokens)
+	usage.CompletionTokensDetails.ReasoningTokens = max(usage.CompletionTokensDetails.ReasoningTokens, meta.Usage.CompletionTokensDetails.ReasoningTokens)
 }
 
 type toolCallBuffer struct {
-	emit        *emitter.Emitter
-	id          string
-	name        string
-	pendingArgs []string
-	started     bool
-	ended       bool
+	emit            *emitter.Emitter
+	parentMessageID string
+	index           *int
+	id              string
+	name            string
+	pendingArgs     []string
+	live            bool
+	started         bool
+	ended           bool
 }
 
 func (b *toolCallBuffer) update(id, name, argsDelta string) {
-	if b == nil || b.emit == nil || b.ended {
+	if b == nil || b.ended {
 		return
 	}
 	if id != "" {
@@ -173,6 +262,9 @@ func (b *toolCallBuffer) update(id, name, argsDelta string) {
 	}
 	if name != "" {
 		b.name = name
+	}
+	if !b.live || b.emit == nil {
+		return
 	}
 	if b.started {
 		b.emit.ToolArgs(b.id, argsDelta)
@@ -185,7 +277,7 @@ func (b *toolCallBuffer) update(id, name, argsDelta string) {
 }
 
 func (b *toolCallBuffer) end() {
-	if b == nil || b.emit == nil || b.ended {
+	if b == nil || b.ended {
 		return
 	}
 	b.startIfReady()
@@ -196,10 +288,10 @@ func (b *toolCallBuffer) end() {
 }
 
 func (b *toolCallBuffer) startIfReady() {
-	if b.started || b.id == "" || b.name == "" {
+	if !b.live || b.emit == nil || b.started || b.id == "" || b.name == "" {
 		return
 	}
-	b.emit.ToolStart(b.id, b.name)
+	b.emit.ToolStart(b.id, b.name, b.parentMessageID)
 	b.started = true
 	for _, arg := range b.pendingArgs {
 		b.emit.ToolArgs(b.id, arg)

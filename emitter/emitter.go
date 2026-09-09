@@ -3,6 +3,8 @@ package emitter
 import (
 	"bufio"
 	"context"
+	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
@@ -46,8 +48,16 @@ func (e *Emitter) Err() error { return e.err }
 // errors drop the malformed event but do not stop later writes.
 func (e *Emitter) EncErr() error { return e.encErr }
 
-func (e *Emitter) write(ev events.Event) bool {
+// Emit sends a caller-built event through the same validation, encoding, and
+// transport error path used by all typed helpers. Callers own protocol ordering.
+func (e *Emitter) Emit(ev events.Event) bool {
 	if e.err != nil {
+		return false
+	}
+	if ev == nil || isNilEvent(ev) {
+		if e.encErr == nil {
+			e.encErr = fmt.Errorf("cannot emit a nil AG-UI event")
+		}
 		return false
 	}
 	if err := e.sse.WriteEvent(e.ctx, e.w, ev); err != nil {
@@ -66,6 +76,11 @@ func (e *Emitter) write(ev events.Event) bool {
 	return true
 }
 
+func isNilEvent(ev events.Event) bool {
+	value := reflect.ValueOf(ev)
+	return value.Kind() == reflect.Pointer && value.IsNil()
+}
+
 func isTransportError(err error) bool {
 	if err == nil {
 		return false
@@ -76,32 +91,59 @@ func isTransportError(err error) bool {
 }
 
 // RunStarted emits RUN_STARTED.
-func (e *Emitter) RunStarted() { e.write(events.NewRunStartedEvent(e.threadID, e.runID)) }
+func (e *Emitter) RunStarted() { e.Emit(events.NewRunStartedEvent(e.threadID, e.runID)) }
 
 // RunFinishedSuccess emits a successful RUN_FINISHED.
-func (e *Emitter) RunFinishedSuccess() {
-	e.write(events.NewRunFinishedEventWithOptions(e.threadID, e.runID, events.WithSuccessOutcome()))
+func (e *Emitter) RunFinishedSuccess(usage ...events.TokenUsage) {
+	options := []events.RunFinishedOption{events.WithSuccessOutcome()}
+	if len(usage) > 0 {
+		options = append(options, events.WithUsage(usage))
+	}
+	e.Emit(events.NewRunFinishedEventWithOptions(e.threadID, e.runID, options...))
 }
 
 // RunFinishedInterrupt emits RUN_FINISHED with interrupt outcome metadata.
-func (e *Emitter) RunFinishedInterrupt(interrupts []types.Interrupt) {
-	e.write(events.NewRunFinishedEventWithOptions(e.threadID, e.runID, events.WithInterruptOutcome(interrupts)))
+func (e *Emitter) RunFinishedInterrupt(interrupts []types.Interrupt, usage ...events.TokenUsage) {
+	options := []events.RunFinishedOption{events.WithInterruptOutcome(interrupts)}
+	if len(usage) > 0 {
+		options = append(options, events.WithUsage(usage))
+	}
+	e.Emit(events.NewRunFinishedEventWithOptions(e.threadID, e.runID, options...))
 }
 
 // RunError emits RUN_ERROR for this emitter's run ID.
-func (e *Emitter) RunError(msg string) {
-	e.write(events.NewRunErrorEvent(msg, events.WithRunID(e.runID)))
+func (e *Emitter) RunError(msg string, usage ...events.TokenUsage) {
+	options := []events.RunErrorOption{events.WithRunID(e.runID)}
+	if len(usage) > 0 {
+		options = append(options, events.WithErrorUsage(usage))
+	}
+	e.Emit(events.NewRunErrorEvent(msg, options...))
 }
 
 // StepStarted emits STEP_STARTED.
-func (e *Emitter) StepStarted(name string) { e.write(events.NewStepStartedEvent(name)) }
+func (e *Emitter) StepStarted(name string) { e.Emit(events.NewStepStartedEvent(name)) }
 
 // StepFinished emits STEP_FINISHED.
-func (e *Emitter) StepFinished(name string) { e.write(events.NewStepFinishedEvent(name)) }
+func (e *Emitter) StepFinished(name string) { e.Emit(events.NewStepFinishedEvent(name)) }
+
+// SubagentStarted emits SUBAGENT_STARTED.
+func (e *Emitter) SubagentStarted(subagentRunID, name string, options ...events.SubagentStartedOption) {
+	e.Emit(events.NewSubagentStartedEvent(subagentRunID, name, options...))
+}
+
+// SubagentFinished emits SUBAGENT_FINISHED.
+func (e *Emitter) SubagentFinished(subagentRunID string, options ...events.SubagentFinishedOption) {
+	e.Emit(events.NewSubagentFinishedEvent(subagentRunID, options...))
+}
+
+// SubagentError emits SUBAGENT_ERROR.
+func (e *Emitter) SubagentError(subagentRunID, message string, options ...events.SubagentErrorOption) {
+	e.Emit(events.NewSubagentErrorEvent(subagentRunID, message, options...))
+}
 
 // TextStart emits TEXT_MESSAGE_START with assistant role.
 func (e *Emitter) TextStart(id string) {
-	wrote := e.write(events.NewTextMessageStartEvent(id, events.WithRole("assistant")))
+	wrote := e.Emit(events.NewTextMessageStartEvent(id, events.WithRole("assistant")))
 	if id != "" && wrote {
 		e.openTextID = id
 	}
@@ -112,23 +154,23 @@ func (e *Emitter) TextContent(id, delta string) {
 	if delta == "" {
 		return
 	}
-	e.write(events.NewTextMessageContentEvent(id, delta))
+	e.Emit(events.NewTextMessageContentEvent(id, delta))
 }
 
 // TextEnd emits TEXT_MESSAGE_END.
 func (e *Emitter) TextEnd(id string) {
-	e.write(events.NewTextMessageEndEvent(id))
+	e.Emit(events.NewTextMessageEndEvent(id))
 	if e.openTextID == id {
 		e.openTextID = ""
 	}
 }
 
 // ReasoningStart emits REASONING_START.
-func (e *Emitter) ReasoningStart(id string) { e.write(events.NewReasoningStartEvent(id)) }
+func (e *Emitter) ReasoningStart(id string) { e.Emit(events.NewReasoningStartEvent(id)) }
 
-// ReasoningMessageStart emits REASONING_MESSAGE_START with assistant role.
+// ReasoningMessageStart emits REASONING_MESSAGE_START with reasoning role.
 func (e *Emitter) ReasoningMessageStart(id string) {
-	wrote := e.write(events.NewReasoningMessageStartEvent(id, "assistant"))
+	wrote := e.Emit(events.NewReasoningMessageStartEvent(id, "reasoning"))
 	if id != "" && wrote {
 		e.openReasoningMessageID = id
 	}
@@ -139,22 +181,22 @@ func (e *Emitter) ReasoningContent(id, delta string) {
 	if delta == "" {
 		return
 	}
-	e.write(events.NewReasoningMessageContentEvent(id, delta))
+	e.Emit(events.NewReasoningMessageContentEvent(id, delta))
 }
 
 // ReasoningMessageEnd emits REASONING_MESSAGE_END.
 func (e *Emitter) ReasoningMessageEnd(id string) {
-	e.write(events.NewReasoningMessageEndEvent(id))
+	e.Emit(events.NewReasoningMessageEndEvent(id))
 	if e.openReasoningMessageID == id {
 		e.openReasoningMessageID = ""
 	}
 }
 
 // ReasoningEnd emits REASONING_END.
-func (e *Emitter) ReasoningEnd(id string) { e.write(events.NewReasoningEndEvent(id)) }
+func (e *Emitter) ReasoningEnd(id string) { e.Emit(events.NewReasoningEndEvent(id)) }
 
 // ToolStart emits TOOL_CALL_START.
-func (e *Emitter) ToolStart(toolCallID, name string) {
+func (e *Emitter) ToolStart(toolCallID, name, parentMessageID string) {
 	if toolCallID == "" || name == "" {
 		return
 	}
@@ -162,8 +204,13 @@ func (e *Emitter) ToolStart(toolCallID, name string) {
 	if e.toolStarted(toolCallID) || e.toolEnded(toolCallID) {
 		return
 	}
-	e.markToolStarted(toolCallID)
-	e.write(events.NewToolCallStartEvent(toolCallID, name))
+	options := []events.ToolCallStartOption{}
+	if parentMessageID != "" {
+		options = append(options, events.WithParentMessageID(parentMessageID))
+	}
+	if e.Emit(events.NewToolCallStartEvent(toolCallID, name, options...)) {
+		e.markToolStarted(toolCallID)
+	}
 }
 
 // ToolArgs emits TOOL_CALL_ARGS unless delta is empty.
@@ -172,7 +219,7 @@ func (e *Emitter) ToolArgs(toolCallID, delta string) {
 		return
 	}
 	e.closeOpenBlocks()
-	e.write(events.NewToolCallArgsEvent(toolCallID, delta))
+	e.Emit(events.NewToolCallArgsEvent(toolCallID, delta))
 }
 
 // ToolEnd emits TOOL_CALL_END.
@@ -181,8 +228,9 @@ func (e *Emitter) ToolEnd(toolCallID string) {
 		return
 	}
 	e.closeOpenBlocks()
-	e.write(events.NewToolCallEndEvent(toolCallID))
-	e.markToolEnded(toolCallID)
+	if e.Emit(events.NewToolCallEndEvent(toolCallID)) {
+		e.markToolEnded(toolCallID)
+	}
 }
 
 // ToolResult emits TOOL_CALL_RESULT. Empty content is normalized to "(empty)"
@@ -195,19 +243,19 @@ func (e *Emitter) ToolResult(messageID, toolCallID, content string) {
 		content = "(empty)"
 	}
 	e.closeOpenBlocks()
-	e.write(events.NewToolCallResultEvent(messageID, toolCallID, content))
+	e.Emit(events.NewToolCallResultEvent(messageID, toolCallID, content))
 }
 
 func (e *Emitter) closeOpenBlocks() {
 	if e.openTextID != "" {
 		id := e.openTextID
 		e.openTextID = ""
-		e.write(events.NewTextMessageEndEvent(id))
+		e.Emit(events.NewTextMessageEndEvent(id))
 	}
 	if e.openReasoningMessageID != "" {
 		id := e.openReasoningMessageID
 		e.openReasoningMessageID = ""
-		e.write(events.NewReasoningMessageEndEvent(id))
+		e.Emit(events.NewReasoningMessageEndEvent(id))
 	}
 }
 
@@ -243,7 +291,7 @@ func (e *Emitter) markToolEnded(toolCallID string) {
 
 // StateSnapshot emits STATE_SNAPSHOT.
 func (e *Emitter) StateSnapshot(snapshot any) {
-	e.write(events.NewStateSnapshotEvent(snapshot))
+	e.Emit(events.NewStateSnapshotEvent(snapshot))
 }
 
 // StateDelta emits STATE_DELTA unless ops is empty.
@@ -251,19 +299,19 @@ func (e *Emitter) StateDelta(ops []events.JSONPatchOperation) {
 	if len(ops) == 0 {
 		return
 	}
-	e.write(events.NewStateDeltaEvent(ops))
+	e.Emit(events.NewStateDeltaEvent(ops))
 }
 
 // MessagesSnapshot emits MESSAGES_SNAPSHOT after removing encrypted reasoning
 // blobs from the client-facing copy.
 func (e *Emitter) MessagesSnapshot(msgs []types.Message) {
-	e.write(events.NewMessagesSnapshotEvent(scrubEncryptedValues(msgs)))
+	e.Emit(events.NewMessagesSnapshotEvent(scrubEncryptedValues(msgs)))
 }
 
 func scrubEncryptedValues(msgs []types.Message) []types.Message {
 	needsScrub := false
 	for i := range msgs {
-		if msgs[i].EncryptedValue != "" || msgs[i].EncryptedContent != "" {
+		if msgs[i].EncryptedValue != "" || msgs[i].EncryptedContent != "" || hasEncryptedToolCall(msgs[i].ToolCalls) {
 			needsScrub = true
 			break
 		}
@@ -276,13 +324,28 @@ func scrubEncryptedValues(msgs []types.Message) []types.Message {
 	for i := range out {
 		out[i].EncryptedValue = ""
 		out[i].EncryptedContent = ""
+		if len(msgs[i].ToolCalls) > 0 {
+			out[i].ToolCalls = append([]types.ToolCall(nil), msgs[i].ToolCalls...)
+			for j := range out[i].ToolCalls {
+				out[i].ToolCalls[j].EncryptedValue = nil
+			}
+		}
 	}
 	return out
 }
 
+func hasEncryptedToolCall(calls []types.ToolCall) bool {
+	for i := range calls {
+		if calls[i].EncryptedValue != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // ActivitySnapshot emits ACTIVITY_SNAPSHOT.
 func (e *Emitter) ActivitySnapshot(messageID, activityType string, content any) {
-	e.write(events.NewActivitySnapshotEvent(messageID, activityType, content))
+	e.Emit(events.NewActivitySnapshotEvent(messageID, activityType, content))
 }
 
 // ActivityDelta emits ACTIVITY_DELTA unless patch is empty.
@@ -290,15 +353,15 @@ func (e *Emitter) ActivityDelta(messageID, activityType string, patch []events.J
 	if len(patch) == 0 {
 		return
 	}
-	e.write(events.NewActivityDeltaEvent(messageID, activityType, patch))
+	e.Emit(events.NewActivityDeltaEvent(messageID, activityType, patch))
 }
 
 // ReasoningEncryptedValue emits REASONING_ENCRYPTED_VALUE.
 func (e *Emitter) ReasoningEncryptedValue(subtype events.ReasoningEncryptedValueSubtype, entityID, encryptedValue string) {
-	e.write(events.NewReasoningEncryptedValueEvent(subtype, entityID, encryptedValue))
+	e.Emit(events.NewReasoningEncryptedValueEvent(subtype, entityID, encryptedValue))
 }
 
 // Custom emits CUSTOM with the given name and value.
 func (e *Emitter) Custom(name string, value any) {
-	e.write(events.NewCustomEvent(name, events.WithValue(value)))
+	e.Emit(events.NewCustomEvent(name, events.WithValue(value)))
 }

@@ -40,6 +40,37 @@ func TestClientToolInfos(t *testing.T) {
 	}
 }
 
+func TestClientToolInfosPreservesMetadataWithoutAliasing(t *testing.T) {
+	metadata := aguitypes.Metadata{"nested": map[string]any{"items": []any{"one"}}}
+	infos, err := ClientToolInfos([]aguitypes.Tool{{Name: "lookup", Metadata: metadata}})
+	if err != nil {
+		t.Fatalf("ClientToolInfos: %v", err)
+	}
+	envelope, ok := infos[0].Extra[aguiExtraKey].(map[string]any)
+	if !ok {
+		t.Fatalf("metadata envelope = %#v", infos[0].Extra)
+	}
+	got, ok := envelope["metadata"].(aguitypes.Metadata)
+	if !ok || !reflect.DeepEqual(got, metadata) {
+		t.Fatalf("metadata = %#v, want %#v", got, metadata)
+	}
+	got["nested"].(map[string]any)["items"].([]any)[0] = "changed"
+	if metadata["nested"].(map[string]any)["items"].([]any)[0] != "one" {
+		t.Fatal("bound metadata aliases caller metadata")
+	}
+
+	infos, err = ClientToolInfos([]aguitypes.Tool{{Name: "absent"}, {Name: "empty", Metadata: aguitypes.Metadata{}}})
+	if err != nil {
+		t.Fatalf("ClientToolInfos nil/empty: %v", err)
+	}
+	if infos[0].Extra != nil {
+		t.Fatalf("absent metadata Extra = %#v, want nil", infos[0].Extra)
+	}
+	if _, ok := infos[1].Extra[aguiExtraKey]; !ok {
+		t.Fatal("explicit empty metadata envelope absent")
+	}
+}
+
 func TestToolBindingMatchesNormalizedGoldenFixture(t *testing.T) {
 	fixture := readToolBindingFixture(t)
 

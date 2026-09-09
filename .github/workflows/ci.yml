@@ -32,3 +32,6 @@ jobs:
 
       - name: Test
         run: go test ./...
+
+      - name: Race-sensitive bridge tests
+        run: go test -race ./convert ./emitter ./stream ./tools

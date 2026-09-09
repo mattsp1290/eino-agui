@@ -24,22 +24,36 @@ func TestParityGoldenFixtures(t *testing.T) {
 				"TestToEinoImagePartMatchesNormalizedGoldenFixture",
 				"TestToolCallsMatchNormalizedGoldenFixture",
 				"TestToAGUIMessagesMatchesNormalizedGoldenFixture",
+				"TestMessageAndToolCallProtocolEnvelopeRoundTrip",
+				"TestToAGUITokenUsage",
 			},
 		},
 		{
-			name:      "emitter",
-			pkg:       "./emitter",
-			testNames: []string{"TestMessagesSnapshotMatchesNormalizedGoldenFixture"},
+			name: "emitter",
+			pkg:  "./emitter",
+			testNames: []string{
+				"TestMessagesSnapshotMatchesNormalizedGoldenFixture",
+				"TestEmitterTargetProtocolFieldsAndGenericPath",
+				"TestToolStartParentAndReasoningRole",
+			},
 		},
 		{
-			name:      "stream",
-			pkg:       "./stream",
-			testNames: []string{"TestStreamTurnMatchesNormalizedGoldenFixture"},
+			name: "stream",
+			pkg:  "./stream",
+			testNames: []string{
+				"TestStreamTurnMatchesNormalizedGoldenFixture",
+				"TestStreamTurnEmitsReasoningTextAndLiveToolCalls",
+				"TestStreamTurnUsageAndNilIndexCorrelation",
+				"TestStreamUsageMapsToRunEndings",
+			},
 		},
 		{
-			name:      "tools",
-			pkg:       "./tools",
-			testNames: []string{"TestToolBindingMatchesNormalizedGoldenFixture"},
+			name: "tools",
+			pkg:  "./tools",
+			testNames: []string{
+				"TestToolBindingMatchesNormalizedGoldenFixture",
+				"TestClientToolInfosPreservesMetadataWithoutAliasing",
+			},
 		},
 		{
 			name: "golden fixture contracts",
@@ -47,6 +61,7 @@ func TestParityGoldenFixtures(t *testing.T) {
 			testNames: []string{
 				"TestGoldenFixtureFilesAreNormalized",
 				"TestGoldenFixtureContracts",
+				"TestTargetFeatureInventory",
 			},
 		},
 	}

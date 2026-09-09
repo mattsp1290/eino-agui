@@ -9,6 +9,8 @@ import (
 	"github.com/eino-contrib/jsonschema"
 )
 
+const aguiExtraKey = "github.com/mattsp1290/eino-agui/ag-ui"
+
 // SchemaOption configures JSON Schema conversion for client tool binding.
 type SchemaOption func(*schemaConfig)
 
@@ -40,6 +42,11 @@ func ClientToolInfos(tools []aguitypes.Tool, opts ...SchemaOption) ([]*schema.To
 		seen[tool.Name] = true
 
 		info := &schema.ToolInfo{Name: tool.Name, Desc: tool.Description}
+		if tool.Metadata != nil {
+			info.Extra = map[string]any{
+				aguiExtraKey: map[string]any{"metadata": cloneMetadata(tool.Metadata)},
+			}
+		}
 		params, err := ToJSONSchema(tool.Parameters, opts...)
 		if err != nil {
 			return nil, fmt.Errorf("tool %q parameters: %w", tool.Name, err)
@@ -50,6 +57,38 @@ func ClientToolInfos(tools []aguitypes.Tool, opts ...SchemaOption) ([]*schema.To
 		out = append(out, info)
 	}
 	return out, nil
+}
+
+func cloneMetadata(in aguitypes.Metadata) aguitypes.Metadata {
+	if in == nil {
+		return nil
+	}
+	out := make(aguitypes.Metadata, len(in))
+	for key, value := range in {
+		out[key] = cloneJSONValue(value)
+	}
+	return out
+}
+
+func cloneJSONValue(value any) any {
+	switch value := value.(type) {
+	case aguitypes.Metadata:
+		return cloneMetadata(value)
+	case map[string]any:
+		out := make(map[string]any, len(value))
+		for key, child := range value {
+			out[key] = cloneJSONValue(child)
+		}
+		return out
+	case []any:
+		out := make([]any, len(value))
+		for i, child := range value {
+			out[i] = cloneJSONValue(child)
+		}
+		return out
+	default:
+		return value
+	}
 }
 
 // ToJSONSchema converts client-supplied JSON Schema data into eino's JSON

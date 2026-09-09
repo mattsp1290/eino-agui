@@ -2,10 +2,10 @@
   "unit": "emitter",
   "name": "messages-snapshot-scrubs-encrypted-reasoning",
   "source": {
-    "repository": "github.com/mattsp1290/ag-ui-go-server-example",
-    "commit": "a6dd6fd896ead9a06014a8a4bed0bb6a1a6cdfb5",
+    "repository": "github.com/mattsp1290/ag-ui",
+    "commit": "aaa75b54d572be8cd1d51c72e951273c5b893ed0",
     "files": [
-      "internal/agent/emitter.go"
+      "sdks/community/go/example/server/internal/agent/emitter.go"
     ]
   },
   "input": {

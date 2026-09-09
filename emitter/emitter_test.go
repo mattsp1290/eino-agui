@@ -40,6 +40,103 @@ func TestNewEmitterWritesLifecycleEvents(t *testing.T) {
 	}
 }
 
+func TestEmitterTargetProtocolFieldsAndGenericPath(t *testing.T) {
+	sink := testsse.NewSink()
+	emit := NewEmitter(context.Background(), sink.Writer(), sink.SSEWriter(), "thread-1", "run-1", nil)
+	input := &types.RunAgentInput{ThreadID: "thread-1", RunID: "run-1"}
+	started := events.NewRunStartedEventWithOptions("thread-1", "run-1", events.WithParentRunID("parent-1"), events.WithRunInput(input))
+	started.Metadata = types.Metadata{"trace": "abc"}
+	if !emit.Emit(started) {
+		t.Fatalf("Emit(RUN_STARTED) failed: %v / %v", emit.Err(), emit.EncErr())
+	}
+	attributedStart := events.NewTextMessageStartEvent("msg-sub", events.WithRole("assistant"))
+	attributedStart.SubagentRunID = "sub-1"
+	emit.Emit(attributedStart)
+	attributedEnd := events.NewTextMessageEndEvent("msg-sub")
+	attributedEnd.SubagentRunID = "sub-1"
+	emit.Emit(attributedEnd)
+	emit.SubagentStarted("sub-1", "research", events.WithSubagentDescription("look up facts"))
+	emit.SubagentFinished("sub-1", events.WithSubagentSuccessOutcome())
+	usage := events.TokenUsage{Provider: "openai", Model: "gpt-test", TotalTokens: events.TokenCount(9)}
+	emit.RunFinishedSuccess(usage)
+
+	frames := normalizedFrames(t, sink)
+	if got, want := golden.FrameTypes(frames), []string{"RUN_STARTED", "TEXT_MESSAGE_START", "TEXT_MESSAGE_END", "SUBAGENT_STARTED", "SUBAGENT_FINISHED", "RUN_FINISHED"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("frame types = %v, want %v", got, want)
+	}
+	if frames[0].Data["parentRunId"] != "parent-1" || frames[0].Data["metadata"].(map[string]any)["trace"] != "abc" {
+		t.Fatalf("generic RUN_STARTED fields = %#v", frames[0].Data)
+	}
+	if frames[0].Data["input"].(map[string]any)["runId"] != "run-1" {
+		t.Fatalf("generic RUN_STARTED input = %#v", frames[0].Data["input"])
+	}
+	if frames[1].Data["subagentRunId"] != "sub-1" || frames[2].Data["subagentRunId"] != "sub-1" {
+		t.Fatalf("generic event attribution = %#v / %#v", frames[1].Data, frames[2].Data)
+	}
+	usageWire := frames[5].Data["usage"].([]any)[0].(map[string]any)
+	if usageWire["totalTokens"] != float64(9) {
+		t.Fatalf("usage = %#v", usageWire)
+	}
+
+	sequence := []events.Event{
+		started,
+		attributedStart,
+		attributedEnd,
+		events.NewSubagentStartedEvent("sub-1", "research"),
+		events.NewSubagentFinishedEvent("sub-1", events.WithSubagentSuccessOutcome()),
+		events.NewRunFinishedEventWithOptions("thread-1", "run-1", events.WithSuccessOutcome(), events.WithUsage([]events.TokenUsage{usage})),
+	}
+	if err := events.ValidateSequence(sequence); err != nil {
+		t.Fatalf("target SDK rejected lifecycle sequence: %v", err)
+	}
+}
+
+func TestRunEndingUsageForSuccessInterruptAndError(t *testing.T) {
+	usage := events.TokenUsage{Provider: "provider", Model: "model", OutputTokens: events.TokenCount(4)}
+	tests := []struct {
+		name     string
+		emit     func(*Emitter)
+		typeName string
+	}{
+		{"success", func(e *Emitter) { e.RunFinishedSuccess(usage) }, "RUN_FINISHED"},
+		{"interrupt", func(e *Emitter) { e.RunFinishedInterrupt([]types.Interrupt{{ID: "int-1", Reason: "approval"}}, usage) }, "RUN_FINISHED"},
+		{"error", func(e *Emitter) { e.RunError("failed", usage) }, "RUN_ERROR"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sink := testsse.NewSink()
+			emit := NewEmitter(context.Background(), sink.Writer(), sink.SSEWriter(), "thread-1", "run-1", nil)
+			tt.emit(emit)
+			frames := normalizedFrames(t, sink)
+			if len(frames) != 1 || frames[0].Data["type"] != tt.typeName {
+				t.Fatalf("frames = %#v", frames)
+			}
+			wireUsage := frames[0].Data["usage"].([]any)[0].(map[string]any)
+			if wireUsage["outputTokens"] != float64(4) {
+				t.Fatalf("usage = %#v", wireUsage)
+			}
+		})
+	}
+}
+
+func TestToolStartParentAndReasoningRole(t *testing.T) {
+	sink := testsse.NewSink()
+	emit := NewEmitter(context.Background(), sink.Writer(), sink.SSEWriter(), "thread-1", "run-1", nil)
+	emit.ReasoningStart("reason-1")
+	emit.ReasoningMessageStart("reason-1")
+	emit.ReasoningMessageEnd("reason-1")
+	emit.ReasoningEnd("reason-1")
+	emit.ToolStart("call-1", "lookup", "owner-1")
+	emit.ToolEnd("call-1")
+	frames := normalizedFrames(t, sink)
+	if frames[1].Data["role"] != "reasoning" {
+		t.Fatalf("reasoning role = %v", frames[1].Data["role"])
+	}
+	if frames[4].Data["parentMessageId"] != "owner-1" {
+		t.Fatalf("parentMessageId = %v", frames[4].Data["parentMessageId"])
+	}
+}
+
 func TestEmitterEventFamilies(t *testing.T) {
 	tests := []struct {
 		name string
@@ -99,6 +196,15 @@ func TestEmitterEventFamilies(t *testing.T) {
 				"CUSTOM",
 			},
 		},
+		{
+			name: "subagent lifecycle",
+			emit: func(e *Emitter) {
+				e.SubagentStarted("sub-1", "research")
+				e.SubagentFinished("sub-1", events.WithSubagentSuccessOutcome())
+				e.SubagentError("sub-2", "failed", events.WithSubagentErrorCode("E_TOOL"))
+			},
+			want: []string{"SUBAGENT_STARTED", "SUBAGENT_FINISHED", "SUBAGENT_ERROR"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -122,8 +228,8 @@ func TestEmitterSkipsEmptyDeltasAndNormalizesEmptyToolResult(t *testing.T) {
 	emit.TextContent("msg-1", "")
 	emit.ReasoningContent("reason-1", "")
 	emit.ToolArgs("tool-1", "")
-	emit.ToolStart("", "read_file")
-	emit.ToolStart("tool-1", "")
+	emit.ToolStart("", "read_file", "")
+	emit.ToolStart("tool-1", "", "")
 	emit.ToolEnd("")
 	emit.StateDelta(nil)
 	emit.ActivityDelta("activity-1", "thinking", nil)
@@ -144,7 +250,7 @@ func TestToolEventsCloseOpenTextAndReasoningBlocks(t *testing.T) {
 
 	emit.TextStart("msg-1")
 	emit.TextContent("msg-1", "partial")
-	emit.ToolStart("tool-1", "file_read")
+	emit.ToolStart("tool-1", "file_read", "")
 
 	emit.ReasoningMessageStart("reason-1")
 	emit.ReasoningContent("reason-1", "thinking")
@@ -171,13 +277,13 @@ func TestDirectToolStartEmitsOnceAndRequiresStartedCallForArgsAndEnd(t *testing.
 
 	emit.ToolArgs("tool-1", "before")
 	emit.ToolEnd("tool-1")
-	emit.ToolStart("tool-1", "file_read")
-	emit.ToolStart("tool-1", "file_read")
+	emit.ToolStart("tool-1", "file_read", "")
+	emit.ToolStart("tool-1", "file_read", "")
 	emit.ToolArgs("tool-1", "{}")
 	emit.ToolEnd("tool-1")
 	emit.ToolArgs("tool-1", "after")
 	emit.ToolEnd("tool-1")
-	emit.ToolStart("tool-1", "file_read")
+	emit.ToolStart("tool-1", "file_read", "")
 
 	frames := normalizedFrames(t, sink)
 	if got, want := golden.FrameTypes(frames), []string{
@@ -199,6 +305,11 @@ func TestMessagesSnapshotScrubsEncryptedValuesWithoutMutatingInput(t *testing.T)
 			Content:          "visible answer",
 			EncryptedValue:   "cipher-value",
 			EncryptedContent: "cipher-content",
+			Metadata:         types.Metadata{"kept": true},
+			ToolCalls: []types.ToolCall{
+				{ID: "call-1", Type: types.ToolCallTypeFunction, Function: types.FunctionCall{Name: "one"}, EncryptedValue: stringPointer("tool-cipher-1"), Metadata: types.Metadata{"index": 1}},
+				{ID: "call-2", Type: types.ToolCallTypeFunction, Function: types.FunctionCall{Name: "two"}, EncryptedValue: stringPointer("")},
+			},
 		},
 	}
 
@@ -206,6 +317,9 @@ func TestMessagesSnapshotScrubsEncryptedValuesWithoutMutatingInput(t *testing.T)
 
 	if messages[0].EncryptedValue == "" || messages[0].EncryptedContent == "" {
 		t.Fatal("MessagesSnapshot mutated input encrypted fields")
+	}
+	if messages[0].ToolCalls[0].EncryptedValue == nil || *messages[0].ToolCalls[0].EncryptedValue != "tool-cipher-1" {
+		t.Fatal("MessagesSnapshot mutated nested tool-call encrypted field")
 	}
 	frames := normalizedFrames(t, sink)
 	if got, want := golden.FrameTypes(frames), []string{"MESSAGES_SNAPSHOT"}; !reflect.DeepEqual(got, want) {
@@ -224,6 +338,15 @@ func TestMessagesSnapshotScrubsEncryptedValuesWithoutMutatingInput(t *testing.T)
 	}
 	if _, ok := frameMessage["encryptedContent"]; ok {
 		t.Fatalf("encryptedContent leaked in frame: %#v", frameMessage)
+	}
+	frameCalls := frameMessage["toolCalls"].([]any)
+	for _, raw := range frameCalls {
+		if _, ok := raw.(map[string]any)["encryptedValue"]; ok {
+			t.Fatalf("nested encryptedValue leaked in frame: %#v", raw)
+		}
+	}
+	if frameMessage["metadata"].(map[string]any)["kept"] != true || frameCalls[0].(map[string]any)["metadata"].(map[string]any)["index"] != float64(1) {
+		t.Fatalf("snapshot metadata was not retained: %#v", frameMessage)
 	}
 }
 
@@ -297,7 +420,7 @@ func TestEncodingErrorDoesNotCancelOrStopSubsequentWrites(t *testing.T) {
 		cancelCalls++
 	})
 
-	emit.write(invalidEvent{BaseEvent: events.NewBaseEvent(events.EventTypeCustom)})
+	emit.Emit(invalidEvent{BaseEvent: events.NewBaseEvent(events.EventTypeCustom)})
 	emit.RunStarted()
 
 	if emit.Err() != nil {
@@ -311,6 +434,23 @@ func TestEncodingErrorDoesNotCancelOrStopSubsequentWrites(t *testing.T) {
 	}
 	if got, want := golden.FrameTypes(normalizedFrames(t, sink)), []string{"RUN_STARTED"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("frame types = %v, want %v", got, want)
+	}
+}
+
+func TestEmitNilEventsAreRecoverableEncodingErrors(t *testing.T) {
+	for _, event := range []events.Event{nil, (*events.CustomEvent)(nil)} {
+		sink := testsse.NewSink()
+		emit := NewEmitter(context.Background(), sink.Writer(), sink.SSEWriter(), "thread-1", "run-1", nil)
+		if emit.Emit(event) {
+			t.Fatalf("Emit(%T) = true, want false", event)
+		}
+		if emit.EncErr() == nil || emit.Err() != nil {
+			t.Fatalf("Emit(%T) errors = transport %v, encoding %v", event, emit.Err(), emit.EncErr())
+		}
+		emit.RunStarted()
+		if got := golden.FrameTypes(normalizedFrames(t, sink)); !reflect.DeepEqual(got, []string{"RUN_STARTED"}) {
+			t.Fatalf("subsequent frames = %v", got)
+		}
 	}
 }
 
@@ -347,6 +487,8 @@ func normalizedFrames(t *testing.T, sink *testsse.Sink) []golden.Frame {
 }
 
 type errorWriter struct{}
+
+func stringPointer(value string) *string { return &value }
 
 func (errorWriter) Write([]byte) (int, error) {
 	return 0, errors.New("broken pipe")

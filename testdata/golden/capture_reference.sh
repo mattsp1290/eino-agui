@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo="${REFERENCE_APP_DIR:-/Users/punk1290/git/ag-ui-go-server-example}"
-expected_commit="a6dd6fd896ead9a06014a8a4bed0bb6a1a6cdfb5"
+repo="${AG_UI_REPO_DIR:?set AG_UI_REPO_DIR to an ag-ui checkout}"
+expected_commit="aaa75b54d572be8cd1d51c72e951273c5b893ed0"
+subtree="sdks/community/go/example/server/internal/agent"
 
 if [[ ! -d "$repo/.git" ]]; then
-  echo "reference app checkout not found: $repo" >&2
+  echo "AG-UI checkout not found: $repo" >&2
   exit 1
 fi
 
@@ -15,7 +16,12 @@ if [[ "$actual_commit" != "$expected_commit" ]]; then
   exit 1
 fi
 
-tmp_test="$repo/internal/agent/golden_capture_external_test.go"
+if [[ -n "$(git -C "$repo" status --porcelain -- "$subtree")" ]]; then
+  echo "AG-UI reference subtree is dirty: $subtree" >&2
+  exit 1
+fi
+
+tmp_test="$repo/$subtree/golden_capture_external_test.go"
 cleanup() {
   rm -f "$tmp_test"
 }
@@ -170,4 +176,4 @@ var _ = io.EOF
 var _ = aguievents.EventTypeRunStarted
 GOEOF
 
-(cd "$repo" && go test ./internal/agent -run 'TestGoldenCapture' -count=1)
+(cd "$repo/sdks/community/go/example/server" && go test ./internal/agent -run 'TestGoldenCapture' -count=1)

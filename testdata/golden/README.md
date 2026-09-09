@@ -1,9 +1,10 @@
 # Golden Fixtures
 
-These fixtures capture normalized behavior from the current reference app:
+These fixtures capture normalized behavior from the AG-UI Go SDK example:
 
-- Repository: `github.com/mattsp1290/ag-ui-go-server-example`
-- Commit: `a6dd6fd896ead9a06014a8a4bed0bb6a1a6cdfb5`
+- Repository: `github.com/mattsp1290/ag-ui`
+- Commit: `aaa75b54d572be8cd1d51c72e951273c5b893ed0`
+- Subtree: `sdks/community/go/example/server/internal/agent`
 
 The comparison contract is structural equivalence after normalization, not
 byte-for-byte SSE equality. Runtime-minted SSE frame IDs, event timestamps, and
@@ -22,8 +23,8 @@ The four fixture files correspond to the first extraction units:
 To re-check the fixtures against the reference implementation, run:
 
 ```bash
-testdata/golden/capture_reference.sh
+AG_UI_REPO_DIR=/path/to/ag-ui testdata/golden/capture_reference.sh
 ```
 
-Set `REFERENCE_APP_DIR` when the reference checkout is not at
-`/Users/punk1290/git/ag-ui-go-server-example`.
+The script requires an exact, clean checkout of the target commit and removes
+its injected capture test on both success and failure.
