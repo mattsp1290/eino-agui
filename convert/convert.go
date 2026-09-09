@@ -7,9 +7,9 @@ import (
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/cloudwego/eino/schema"
-)
 
-const aguiExtraKey = "github.com/mattsp1290/eino-agui/ag-ui"
+	"github.com/mattsp1290/eino-agui/internal/protocolmeta"
+)
 
 // EinoOption configures AG-UI to eino message conversion.
 type EinoOption func(*einoConfig)
@@ -194,7 +194,7 @@ func ToEinoToolCalls(tcs []types.ToolCall) []schema.ToolCall {
 			envelope["encryptedValue"] = &value
 		}
 		if len(envelope) > 0 {
-			call.Extra = map[string]any{aguiExtraKey: envelope}
+			call.Extra = map[string]any{protocolmeta.ExtraKey: envelope}
 		}
 		out = append(out, call)
 	}
@@ -285,7 +285,7 @@ func withMessageEnvelope(msg *schema.Message, source types.Message) *schema.Mess
 		return msg
 	}
 	msg.Extra = cloneExtra(msg.Extra)
-	msg.Extra[aguiExtraKey] = envelope
+	msg.Extra[protocolmeta.ExtraKey] = envelope
 	return msg
 }
 
@@ -293,7 +293,7 @@ func messageEnvelope(extra map[string]any) map[string]any {
 	if extra == nil {
 		return nil
 	}
-	envelope, _ := extra[aguiExtraKey].(map[string]any)
+	envelope, _ := extra[protocolmeta.ExtraKey].(map[string]any)
 	return envelope
 }
 
@@ -303,9 +303,9 @@ func metadataFromEnvelope(envelope map[string]any) types.Metadata {
 	}
 	switch metadata := envelope["metadata"].(type) {
 	case types.Metadata:
-		return cloneMetadata(metadata)
+		return protocolmeta.CloneMetadata(metadata)
 	case map[string]any:
-		return cloneMetadata(types.Metadata(metadata))
+		return protocolmeta.CloneMetadata(types.Metadata(metadata))
 	default:
 		return nil
 	}
@@ -315,47 +315,10 @@ func cloneExtra(in map[string]any) map[string]any {
 	if in == nil {
 		return make(map[string]any)
 	}
-	out := make(map[string]any, len(in)+1)
-	for key, value := range in {
-		out[key] = cloneJSONValue(value)
-	}
+	out := protocolmeta.CloneMap(in)
 	return out
 }
 
 func cloneMetadata(in types.Metadata) types.Metadata {
-	if in == nil {
-		return nil
-	}
-	out := make(types.Metadata, len(in))
-	for key, value := range in {
-		out[key] = cloneJSONValue(value)
-	}
-	return out
-}
-
-func cloneJSONValue(value any) any {
-	switch value := value.(type) {
-	case types.Metadata:
-		return cloneMetadata(value)
-	case map[string]any:
-		out := make(map[string]any, len(value))
-		for key, child := range value {
-			out[key] = cloneJSONValue(child)
-		}
-		return out
-	case []any:
-		out := make([]any, len(value))
-		for i, child := range value {
-			out[i] = cloneJSONValue(child)
-		}
-		return out
-	case *string:
-		if value == nil {
-			return (*string)(nil)
-		}
-		copyValue := *value
-		return &copyValue
-	default:
-		return value
-	}
+	return protocolmeta.CloneMetadata(in)
 }

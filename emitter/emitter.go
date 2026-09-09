@@ -29,6 +29,7 @@ type Emitter struct {
 	err                    error
 	encErr                 error
 	openTextID             string
+	openReasoningID        string
 	openReasoningMessageID string
 	startedToolCalls       map[string]struct{}
 	endedToolCalls         map[string]struct{}
@@ -166,7 +167,11 @@ func (e *Emitter) TextEnd(id string) {
 }
 
 // ReasoningStart emits REASONING_START.
-func (e *Emitter) ReasoningStart(id string) { e.Emit(events.NewReasoningStartEvent(id)) }
+func (e *Emitter) ReasoningStart(id string) {
+	if e.Emit(events.NewReasoningStartEvent(id)) && id != "" {
+		e.openReasoningID = id
+	}
+}
 
 // ReasoningMessageStart emits REASONING_MESSAGE_START with reasoning role.
 func (e *Emitter) ReasoningMessageStart(id string) {
@@ -193,7 +198,12 @@ func (e *Emitter) ReasoningMessageEnd(id string) {
 }
 
 // ReasoningEnd emits REASONING_END.
-func (e *Emitter) ReasoningEnd(id string) { e.Emit(events.NewReasoningEndEvent(id)) }
+func (e *Emitter) ReasoningEnd(id string) {
+	e.Emit(events.NewReasoningEndEvent(id))
+	if e.openReasoningID == id {
+		e.openReasoningID = ""
+	}
+}
 
 // ToolStart emits TOOL_CALL_START.
 func (e *Emitter) ToolStart(toolCallID, name, parentMessageID string) {
@@ -256,6 +266,11 @@ func (e *Emitter) closeOpenBlocks() {
 		id := e.openReasoningMessageID
 		e.openReasoningMessageID = ""
 		e.Emit(events.NewReasoningMessageEndEvent(id))
+	}
+	if e.openReasoningID != "" {
+		id := e.openReasoningID
+		e.openReasoningID = ""
+		e.Emit(events.NewReasoningEndEvent(id))
 	}
 }
 

@@ -271,6 +271,28 @@ func TestToolEventsCloseOpenTextAndReasoningBlocks(t *testing.T) {
 	}
 }
 
+func TestToolEventsCloseCompleteReasoningLifecycle(t *testing.T) {
+	sink := testsse.NewSink()
+	emit := NewEmitter(context.Background(), sink.Writer(), sink.SSEWriter(), "thread-1", "run-1", nil)
+
+	emit.ReasoningStart("reason-1")
+	emit.ReasoningMessageStart("reason-1")
+	emit.ReasoningContent("reason-1", "thinking")
+	emit.ToolStart("tool-1", "file_read", "owner-1")
+
+	frames := normalizedFrames(t, sink)
+	if got, want := golden.FrameTypes(frames), []string{
+		"REASONING_START",
+		"REASONING_MESSAGE_START",
+		"REASONING_MESSAGE_CONTENT",
+		"REASONING_MESSAGE_END",
+		"REASONING_END",
+		"TOOL_CALL_START",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("frame types = %v, want %v", got, want)
+	}
+}
+
 func TestDirectToolStartEmitsOnceAndRequiresStartedCallForArgsAndEnd(t *testing.T) {
 	sink := testsse.NewSink()
 	emit := NewEmitter(context.Background(), sink.Writer(), sink.SSEWriter(), "thread-1", "run-1", nil)

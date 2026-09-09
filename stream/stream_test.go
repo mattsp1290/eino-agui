@@ -2,6 +2,7 @@ package stream
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -257,6 +258,12 @@ func TestStreamTurnUsageAndNilIndexCorrelation(t *testing.T) {
 	if result.Usage == nil || result.Usage.TotalTokens != 5 {
 		t.Fatalf("usage = %#v", result.Usage)
 	}
+	if len(result.Assistant.ToolCalls) != 1 || result.Assistant.ToolCalls[0].ID != "call-1" || result.Assistant.ToolCalls[0].Function.Arguments != "{}" {
+		t.Fatalf("assistant tool calls = %#v, want one merged call", result.Assistant.ToolCalls)
+	}
+	if len(result.WireMessages) != 2 || len(result.WireMessages[1].ToolCalls) != 1 || result.WireMessages[1].ToolCalls[0].Function.Arguments != "{}" {
+		t.Fatalf("wire messages = %#v, want one merged owner call", result.WireMessages)
+	}
 	frames := normalizedFrames(t, sink)
 	var deltas []string
 	for _, frame := range frames {
@@ -266,6 +273,26 @@ func TestStreamTurnUsageAndNilIndexCorrelation(t *testing.T) {
 	}
 	if !reflect.DeepEqual(deltas, []string{"{", "}"}) {
 		t.Fatalf("tool deltas = %#v, anonymous fragment was not discarded", deltas)
+	}
+}
+
+func TestStreamTurnDiscardsAnonymousOnlyToolFragmentsWithoutOwner(t *testing.T) {
+	chunk := &schema.Message{Role: schema.Assistant, ToolCalls: []schema.ToolCall{{
+		Type:     "function",
+		Function: schema.FunctionCall{Name: "ignored", Arguments: "{}"},
+	}}}
+	sink := testsse.NewSink()
+	emit := emitter.NewEmitter(context.Background(), sink.Writer(), sink.SSEWriter(), "thread-1", "run-1", nil)
+
+	result, err := StreamTurn(context.Background(), emit, testmodel.NewReplayModel([]*schema.Message{chunk}), nil, WithLiveToolCallEvents(true))
+	if err != nil {
+		t.Fatalf("StreamTurn: %v", err)
+	}
+	if result.ToolOwnerID != "" || len(result.WireMessages) != 0 || len(result.Assistant.ToolCalls) != 0 {
+		t.Fatalf("anonymous fragment leaked into result: %#v", result)
+	}
+	if frames := normalizedFrames(t, sink); len(frames) != 0 {
+		t.Fatalf("anonymous fragment emitted frames: %#v", frames)
 	}
 }
 
@@ -347,6 +374,33 @@ func TestStreamTurnReturnsPartialResultOnTerminalTransportError(t *testing.T) {
 	}
 	if result == nil || !result.Partial || result.Usage == nil || result.Usage.TotalTokens != 6 {
 		t.Fatalf("partial result = %#v", result)
+	}
+}
+
+func TestStreamTurnWireMessagesExcludeUnwrittenContent(t *testing.T) {
+	writer := &failAfterWriter{remaining: 2}
+	emit := emitter.NewEmitter(context.Background(), bufio.NewWriter(writer), sse.NewSSEWriter(), "thread-1", "run-1", nil)
+	model := testmodel.NewReplayModel([]*schema.Message{
+		{Role: schema.Assistant, Content: "written"},
+		{Role: schema.Assistant, Content: "-not-written"},
+	})
+
+	result, err := StreamTurn(context.Background(), emit, model, nil)
+	if err == nil || emit.Err() == nil {
+		t.Fatalf("transport errors = returned %v, emitter %v", err, emit.Err())
+	}
+	if result == nil || !result.Partial {
+		t.Fatalf("partial result = %#v", result)
+	}
+	if len(result.WireMessages) != 0 {
+		t.Fatalf("wire messages include an unterminated or unwritten message: %#v", result.WireMessages)
+	}
+	frames, normalizeErr := golden.NormalizeSSE(writer.buf.Bytes())
+	if normalizeErr != nil {
+		t.Fatalf("normalize successfully written frames: %v", normalizeErr)
+	}
+	if got, want := golden.FrameTypes(frames), []string{"TEXT_MESSAGE_START", "TEXT_MESSAGE_CONTENT"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("written frame types = %v, want %v", got, want)
 	}
 }
 
@@ -608,3 +662,16 @@ func (m readerModel) WithTools([]*schema.ToolInfo) (model.ToolCallingChatModel, 
 type streamErrorWriter struct{}
 
 func (streamErrorWriter) Write([]byte) (int, error) { return 0, errors.New("broken pipe") }
+
+type failAfterWriter struct {
+	buf       bytes.Buffer
+	remaining int
+}
+
+func (w *failAfterWriter) Write(data []byte) (int, error) {
+	if w.remaining == 0 {
+		return 0, errors.New("broken pipe")
+	}
+	w.remaining--
+	return w.buf.Write(data)
+}

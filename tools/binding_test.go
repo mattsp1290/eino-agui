@@ -9,6 +9,8 @@ import (
 
 	aguitypes "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/cloudwego/eino/schema"
+
+	"github.com/mattsp1290/eino-agui/internal/protocolmeta"
 )
 
 func TestClientToolInfos(t *testing.T) {
@@ -41,12 +43,16 @@ func TestClientToolInfos(t *testing.T) {
 }
 
 func TestClientToolInfosPreservesMetadataWithoutAliasing(t *testing.T) {
-	metadata := aguitypes.Metadata{"nested": map[string]any{"items": []any{"one"}}}
+	type labels []string
+	type attributes map[string]string
+	typedLabels := labels{"one"}
+	typedAttributes := attributes{"state": "original"}
+	metadata := aguitypes.Metadata{"nested": map[string]any{"items": []any{"one"}}, "labels": typedLabels, "attributes": typedAttributes}
 	infos, err := ClientToolInfos([]aguitypes.Tool{{Name: "lookup", Metadata: metadata}})
 	if err != nil {
 		t.Fatalf("ClientToolInfos: %v", err)
 	}
-	envelope, ok := infos[0].Extra[aguiExtraKey].(map[string]any)
+	envelope, ok := infos[0].Extra[protocolmeta.ExtraKey].(map[string]any)
 	if !ok {
 		t.Fatalf("metadata envelope = %#v", infos[0].Extra)
 	}
@@ -55,7 +61,9 @@ func TestClientToolInfosPreservesMetadataWithoutAliasing(t *testing.T) {
 		t.Fatalf("metadata = %#v, want %#v", got, metadata)
 	}
 	got["nested"].(map[string]any)["items"].([]any)[0] = "changed"
-	if metadata["nested"].(map[string]any)["items"].([]any)[0] != "one" {
+	got["labels"].(labels)[0] = "changed"
+	got["attributes"].(attributes)["state"] = "changed"
+	if metadata["nested"].(map[string]any)["items"].([]any)[0] != "one" || typedLabels[0] != "one" || typedAttributes["state"] != "original" {
 		t.Fatal("bound metadata aliases caller metadata")
 	}
 
@@ -66,7 +74,7 @@ func TestClientToolInfosPreservesMetadataWithoutAliasing(t *testing.T) {
 	if infos[0].Extra != nil {
 		t.Fatalf("absent metadata Extra = %#v, want nil", infos[0].Extra)
 	}
-	if _, ok := infos[1].Extra[aguiExtraKey]; !ok {
+	if _, ok := infos[1].Extra[protocolmeta.ExtraKey]; !ok {
 		t.Fatal("explicit empty metadata envelope absent")
 	}
 }

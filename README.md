@@ -17,22 +17,24 @@ outside this library.
 ## Install
 
 ```bash
-go get github.com/mattsp1290/eino-agui
+go mod edit -replace github.com/ag-ui-protocol/ag-ui/sdks/community/go=github.com/mattsp1290/ag-ui/sdks/community/go@v0.0.0-20260909025854-aaa75b54d572
+go get github.com/mattsp1290/eino-agui@<tag-or-commit>
 ```
 
 For local development against a checkout:
 
 ```bash
+go mod edit -replace github.com/ag-ui-protocol/ag-ui/sdks/community/go=github.com/mattsp1290/ag-ui/sdks/community/go@v0.0.0-20260909025854-aaa75b54d572
 go mod edit -replace github.com/mattsp1290/eino-agui=/path/to/eino-agui
 go get github.com/mattsp1290/eino-agui
 ```
 
-Remove the local replacement before depending on a published version, and use
-an explicit tag or commit:
+Remove only the local library replacement before depending on a published
+version; the remote AG-UI replacement remains required:
 
 ```bash
 go mod edit -dropreplace github.com/mattsp1290/eino-agui
-go get github.com/mattsp1290/eino-agui@<tag-or-commit>
+go get github.com/mattsp1290/eino-agui@<new-tag-or-commit>
 ```
 
 ## Version Expectations

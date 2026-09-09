@@ -10,6 +10,8 @@ import (
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/cloudwego/eino/schema"
 
+	"github.com/mattsp1290/eino-agui/internal/protocolmeta"
+
 	"github.com/mattsp1290/eino-agui/internal/testids"
 )
 
@@ -182,11 +184,13 @@ func TestToEinoMessagesMapsRolesAndToolCalls(t *testing.T) {
 }
 
 func TestMessageAndToolCallProtocolEnvelopeRoundTrip(t *testing.T) {
+	type labels []string
+	typedLabels := labels{"one"}
 	encrypted := "cipher"
 	input := types.Message{
 		Role:          types.RoleAssistant,
 		Content:       "answer",
-		Metadata:      types.Metadata{"nested": map[string]any{"items": []any{"one"}}},
+		Metadata:      types.Metadata{"nested": map[string]any{"items": []any{"one"}}, "labels": typedLabels},
 		SubagentRunID: "sub-1",
 		ToolCalls: []types.ToolCall{{
 			ID: "call-1", Type: types.ToolCallTypeFunction,
@@ -196,7 +200,7 @@ func TestMessageAndToolCallProtocolEnvelopeRoundTrip(t *testing.T) {
 		}},
 	}
 	eino := ToEinoMessages([]types.Message{input})
-	if len(eino) != 1 || eino[0].Extra[aguiExtraKey] == nil {
+	if len(eino) != 1 || eino[0].Extra[protocolmeta.ExtraKey] == nil {
 		t.Fatalf("Eino envelope = %#v", eino)
 	}
 	got := ToAGUIMessages(eino)
@@ -208,16 +212,17 @@ func TestMessageAndToolCallProtocolEnvelopeRoundTrip(t *testing.T) {
 	}
 
 	got[0].Metadata["nested"].(map[string]any)["items"].([]any)[0] = "changed"
+	got[0].Metadata["labels"].(labels)[0] = "changed"
 	*got[0].ToolCalls[0].EncryptedValue = "changed"
-	if input.Metadata["nested"].(map[string]any)["items"].([]any)[0] != "one" || encrypted != "cipher" {
+	if input.Metadata["nested"].(map[string]any)["items"].([]any)[0] != "one" || typedLabels[0] != "one" || encrypted != "cipher" {
 		t.Fatal("round-trip output aliases caller input")
 	}
 }
 
 func TestProtocolEnvelopePreservesProviderExtraAndIgnoresCollisions(t *testing.T) {
 	message := &schema.Message{Role: schema.Assistant, Content: "answer", Extra: map[string]any{
-		"provider":   "kept",
-		aguiExtraKey: "wrong shape",
+		"provider":            "kept",
+		protocolmeta.ExtraKey: "wrong shape",
 	}}
 	got := ToAGUIMessages([]*schema.Message{message})
 	if got[0].Metadata != nil || got[0].SubagentRunID != "" {
@@ -226,7 +231,7 @@ func TestProtocolEnvelopePreservesProviderExtraAndIgnoresCollisions(t *testing.T
 
 	input := types.Message{Role: types.RoleUser, Content: "hello", Metadata: types.Metadata{}}
 	eino := ToEinoMessages([]types.Message{input})[0]
-	if _, ok := eino.Extra[aguiExtraKey]; !ok {
+	if _, ok := eino.Extra[protocolmeta.ExtraKey]; !ok {
 		t.Fatal("explicit empty metadata was not retained")
 	}
 	if eino.Extra["provider"] != nil {
