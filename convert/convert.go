@@ -187,7 +187,7 @@ func ToEinoToolCalls(tcs []types.ToolCall) []schema.ToolCall {
 		}
 		envelope := make(map[string]any)
 		if tc.Metadata != nil {
-			envelope["metadata"] = cloneMetadata(tc.Metadata)
+			envelope["metadata"] = protocolmeta.CloneMetadata(tc.Metadata)
 		}
 		if tc.EncryptedValue != nil {
 			value := *tc.EncryptedValue
@@ -276,7 +276,7 @@ func withMessageEnvelope(msg *schema.Message, source types.Message) *schema.Mess
 	}
 	envelope := make(map[string]any)
 	if source.Metadata != nil {
-		envelope["metadata"] = cloneMetadata(source.Metadata)
+		envelope["metadata"] = protocolmeta.CloneMetadata(source.Metadata)
 	}
 	if source.SubagentRunID != "" {
 		envelope["subagentRunId"] = source.SubagentRunID
@@ -284,7 +284,7 @@ func withMessageEnvelope(msg *schema.Message, source types.Message) *schema.Mess
 	if len(envelope) == 0 {
 		return msg
 	}
-	msg.Extra = cloneExtra(msg.Extra)
+	msg.Extra = protocolmeta.CloneMap(msg.Extra)
 	msg.Extra[protocolmeta.ExtraKey] = envelope
 	return msg
 }
@@ -309,16 +309,4 @@ func metadataFromEnvelope(envelope map[string]any) types.Metadata {
 	default:
 		return nil
 	}
-}
-
-func cloneExtra(in map[string]any) map[string]any {
-	if in == nil {
-		return make(map[string]any)
-	}
-	out := protocolmeta.CloneMap(in)
-	return out
-}
-
-func cloneMetadata(in types.Metadata) types.Metadata {
-	return protocolmeta.CloneMetadata(in)
 }
