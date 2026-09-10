@@ -18,6 +18,7 @@ import (
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 	"github.com/cloudwego/eino/schema/gemini"
+	"github.com/cloudwego/eino/schema/openai"
 
 	"github.com/mattsp1290/eino-agui/convert"
 	"github.com/mattsp1290/eino-agui/emitter"
@@ -264,6 +265,42 @@ func TestStreamAgenticTurnSupportsEinoSplitRichBlocks(t *testing.T) {
 	}
 }
 
+func TestStreamAgenticTurnDefersAnnotationsToConcatenatedText(t *testing.T) {
+	t.Parallel()
+	chunks := []*schema.AgenticMessage{
+		{Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{
+			schema.NewContentBlockChunk(&schema.AssistantGenText{Text: "hello "}, &schema.StreamingMeta{Index: 0}),
+		}},
+		{Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{
+			schema.NewContentBlockChunk(&schema.AssistantGenText{
+				Text: "world",
+				OpenAIExtension: &openai.AssistantGenTextExtension{Annotations: []*openai.TextAnnotation{{
+					Index: 0,
+					Type:  openai.TextAnnotationTypeURLCitation,
+					URLCitation: &openai.TextAnnotationURLCitation{
+						Title: "source", URL: "https://example.test", StartIndex: 0, EndIndex: 11,
+					},
+				}}},
+			}, &schema.StreamingMeta{Index: 0}),
+		}},
+	}
+	sink := &recordingSink{}
+	result, err := StreamAgenticTurn(
+		t.Context(), testmodel.NewAgenticReplayModel(chunks), nil, agenticIDs(),
+		testBlockResolver{0: {BlockID: "text"}}, WithTransientSink(sink),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := result.PublicProjection.Public.ContentBlocks[0]
+	if block.Text == nil || *block.Text != "hello world" || block.ProviderAnnotations == nil || len(block.ProviderAnnotations.OpenAI) != 1 {
+		t.Fatalf("concatenated annotated block = %#v", block)
+	}
+	if len(result.DeliveredTransient) != 2 {
+		t.Fatalf("transient text chunks = %d, want 2", len(result.DeliveredTransient))
+	}
+}
+
 func TestStreamAgenticTurnDetachesObserverAndFinishes(t *testing.T) {
 	t.Parallel()
 	chunks := testmodel.AgenticTextChunks(0, "one", "two", "three")
@@ -376,6 +413,13 @@ func TestStreamAgenticTurnLateMalformedChunkReturnsPartialPrefix(t *testing.T) {
 	}
 	if bytes.Contains(encoded, []byte(private)) {
 		t.Fatalf("private chunk leaked beyond partial prefix: %s", encoded)
+	}
+	assistantWire, marshalErr := json.Marshal(result.Assistant)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	if bytes.Contains(assistantWire, []byte(private)) {
+		t.Fatalf("rejected private chunk leaked into partial assistant: %s", assistantWire)
 	}
 }
 
@@ -678,6 +722,29 @@ func TestStreamAgenticTurnEnforcesCumulativeRichLimitsBeforeConcat(t *testing.T)
 			t.Context(), testmodel.NewAgenticReplayModel(chunks), nil, agenticIDs(), testBlockResolver{}, WithProjectionLimits(limits),
 		)
 		if err == nil || !strings.Contains(err.Error(), "grounding entry limit exceeded") || result == nil || !result.Partial {
+			t.Fatalf("result=%#v error=%v", result, err)
+		}
+	})
+
+	t.Run("provider annotations", func(t *testing.T) {
+		chunk := func(index int) *schema.AgenticMessage {
+			return &schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{
+				schema.NewContentBlockChunk(&schema.AssistantGenText{
+					Text: "x",
+					OpenAIExtension: &openai.AssistantGenTextExtension{Annotations: []*openai.TextAnnotation{{
+						Index: index, Type: openai.TextAnnotationTypeFileCitation,
+						FileCitation: &openai.TextAnnotationFileCitation{FileID: "file"},
+					}}},
+				}, &schema.StreamingMeta{Index: 0}),
+			}}
+		}
+		limits := convert.DefaultProjectionLimits()
+		limits.MaxAnnotations = 1
+		result, err := StreamAgenticTurn(
+			t.Context(), testmodel.NewAgenticReplayModel([]*schema.AgenticMessage{chunk(0), chunk(1)}), nil,
+			agenticIDs(), testBlockResolver{0: {BlockID: "text"}}, WithProjectionLimits(limits),
+		)
+		if err == nil || !strings.Contains(err.Error(), "provider annotation limit exceeded") || result == nil || !result.Partial {
 			t.Fatalf("result=%#v error=%v", result, err)
 		}
 	})

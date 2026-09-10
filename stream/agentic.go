@@ -237,7 +237,7 @@ func (s *agenticDrain) apply(chunk *schema.AgenticMessage) error {
 		if err != nil {
 			return err
 		}
-		if err := s.accountBlock(public, &updated); err != nil {
+		if err := s.accountBlock(public, normalized, &updated); err != nil {
 			return fmt.Errorf("agentic stream block %d: %w", index, err)
 		}
 		s.indexed[index] = updated
@@ -426,10 +426,15 @@ func (s *agenticDrain) emitTransient(block convert.PublicContentBlock) error {
 	return nil
 }
 
-func (s *agenticDrain) accountBlock(block convert.PublicContentBlock, ledger *blockLedger) error {
+func (s *agenticDrain) accountBlock(block convert.PublicContentBlock, source *schema.ContentBlock, ledger *blockLedger) error {
 	delta, err := streamBlockPayloadBytes(block, s.config.limits.MaxBlockBytes)
 	if err != nil {
 		return err
+	}
+	if source != nil && source.AssistantGenText != nil && source.AssistantGenText.OpenAIExtension != nil && source.AssistantGenText.OpenAIExtension.Refusal != nil {
+		if err := addStreamCount(&delta, len(source.AssistantGenText.OpenAIExtension.Refusal.Reason), s.config.limits.MaxBlockBytes, "cumulative public block payload limit exceeded"); err != nil {
+			return err
+		}
 	}
 	if err := addStreamCount(&ledger.payloadBytes, delta, s.config.limits.MaxBlockBytes, "cumulative public block payload limit exceeded"); err != nil {
 		return err
@@ -447,8 +452,18 @@ func (s *agenticDrain) accountBlock(block convert.PublicContentBlock, ledger *bl
 			return err
 		}
 	}
-	if block.ProviderAnnotations != nil {
-		count := len(block.ProviderAnnotations.OpenAI) + len(block.ProviderAnnotations.Claude)
+	if source != nil && source.AssistantGenText != nil {
+		count := 0
+		if source.AssistantGenText.OpenAIExtension != nil {
+			if err := addStreamCount(&count, len(source.AssistantGenText.OpenAIExtension.Annotations), s.config.limits.MaxAnnotations, "provider annotation limit exceeded"); err != nil {
+				return err
+			}
+		}
+		if source.AssistantGenText.ClaudeExtension != nil {
+			if err := addStreamCount(&count, len(source.AssistantGenText.ClaudeExtension.Citations), s.config.limits.MaxAnnotations, "provider annotation limit exceeded"); err != nil {
+				return err
+			}
+		}
 		if err := addStreamCount(&ledger.annotations, count, s.config.limits.MaxAnnotations, "provider annotation limit exceeded"); err != nil {
 			return err
 		}
@@ -553,6 +568,12 @@ func addStreamCount(current *int, next, limit int, message string) error {
 func projectChunkBlock(role schema.AgenticRoleType, block *schema.ContentBlock, context convert.AgenticBlockContext, base convert.AgenticIdentityV1, limits convert.ProjectionLimits) (convert.PublicContentBlock, error) {
 	copyBlock := *block
 	copyBlock.StreamingMeta = nil
+	if block.Type == schema.ContentBlockTypeAssistantGenText && block.AssistantGenText != nil {
+		text := *block.AssistantGenText
+		text.OpenAIExtension = nil
+		text.ClaudeExtension = nil
+		copyBlock.AssistantGenText = &text
+	}
 	projection, err := convert.ProjectAgenticMessage(&schema.AgenticMessage{Role: role, ContentBlocks: []*schema.ContentBlock{&copyBlock}}, convert.AgenticProjectionContext{Identity: base, Blocks: []convert.AgenticBlockContext{context}, Limits: limits})
 	if err != nil {
 		return convert.PublicContentBlock{}, err
