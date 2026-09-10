@@ -1255,6 +1255,25 @@ func TestProjectionLimitsAndApprovalCorrelation(t *testing.T) {
 	if _, err := LifecycleDigestV1(envelope); err == nil {
 		t.Fatal("unvalidated approval correlation was accepted")
 	}
+
+	for _, tc := range []struct {
+		name    string
+		targets []InterruptTargetV1
+	}{
+		{name: "duplicate target ID", targets: []InterruptTargetV1{{ID: "same", Address: "node/0"}, {ID: "same", Address: "node/1"}}},
+		{name: "duplicate target address", targets: []InterruptTargetV1{{ID: "first", Address: "node/0"}, {ID: "second", Address: "node/0"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			value := &AgenticEnvelopeV1{Version: AgenticSchemaVersion, Kind: EnvelopePaused, Identity: testIdentity(), Paused: &PausedV1{PauseID: "pause", Targets: tc.targets}}
+			if _, err := LifecycleDigestV1(value); err == nil {
+				t.Fatal("ambiguous interrupt targets were accepted")
+			}
+		})
+	}
+	validTargets := &AgenticEnvelopeV1{Version: AgenticSchemaVersion, Kind: EnvelopePaused, Identity: testIdentity(), Paused: &PausedV1{PauseID: "pause", Targets: []InterruptTargetV1{{ID: "first", Address: "node/0"}, {ID: "second", Address: "node/1"}}}}
+	if _, err := LifecycleDigestV1(validTargets); err != nil {
+		t.Fatalf("distinct interrupt targets rejected: %v", err)
+	}
 }
 
 func TestProjectionAcceptsExactAndRejectsOneOverEncodedByteLimits(t *testing.T) {

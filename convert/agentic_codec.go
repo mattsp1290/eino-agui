@@ -1706,12 +1706,20 @@ func validateInterruptTargets(targets []InterruptTargetV1) error {
 	if len(targets) == 0 || len(targets) > DefaultProjectionLimits().MaxInterruptTargets {
 		return errors.New("interrupt targets must be non-empty and within the configured limit")
 	}
-	seen := make(map[string]bool, len(targets))
+	seenIDs := make(map[string]struct{}, len(targets))
+	seenAddresses := make(map[string]struct{}, len(targets))
 	for _, target := range targets {
-		if target.ID == "" || target.Address == "" || seen[target.ID+"\x00"+target.Address] {
+		if target.ID == "" || target.Address == "" {
 			return errors.New("interrupt target IDs and addresses must be non-empty and unique")
 		}
-		seen[target.ID+"\x00"+target.Address] = true
+		if _, duplicate := seenIDs[target.ID]; duplicate {
+			return errors.New("interrupt target IDs and addresses must be non-empty and unique")
+		}
+		if _, duplicate := seenAddresses[target.Address]; duplicate {
+			return errors.New("interrupt target IDs and addresses must be non-empty and unique")
+		}
+		seenIDs[target.ID] = struct{}{}
+		seenAddresses[target.Address] = struct{}{}
 	}
 	return nil
 }
