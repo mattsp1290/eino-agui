@@ -33,6 +33,22 @@ const (
     ToolExecutionOwnerProvider ToolExecutionOwner = "provider"
     ToolExecutionOwnerProviderMCP ToolExecutionOwner = "provider_mcp"
 )
+
+type CancellationModeV1 string
+const (
+    CancellationModeImmediate CancellationModeV1 = "immediate"
+    CancellationModeAfterChatModel CancellationModeV1 = "after_chat_model"
+    CancellationModeAfterToolCalls CancellationModeV1 = "after_tool_calls"
+    CancellationModeAfterChatOrToolCalls CancellationModeV1 = "after_chat_model_or_tool_calls"
+)
+
+type CancellationClassificationV1 string
+const (
+    CancellationClassImmediate CancellationClassificationV1 = "immediate"
+    CancellationClassSafePoint CancellationClassificationV1 = "safe_point"
+    CancellationClassEscalated CancellationClassificationV1 = "escalated"
+    CancellationClassTimeout CancellationClassificationV1 = "timeout"
+)
 ```
 
 Conversion starts with:
@@ -89,6 +105,13 @@ identity. The optional configured cancellation candidate records host policy if
 the execution context is cancelled; it never causes cancellation. Transfer,
 exit, and break-loop remain host control observations. Arbitrary customized
 output/action is rejected.
+
+Cancellation modes and classifications form a closed v1 vocabulary. Immediate
+cancellation requires immediate requested and observed modes. A safe-point
+observation repeats one non-immediate requested mode exactly. Escalated and
+timeout outcomes retain the requested safe-point mode and report immediate as
+the observed mode. Unknown or inconsistent combinations are rejected rather
+than projected as an `unknown` durable fact.
 
 ## Commit and delivery
 

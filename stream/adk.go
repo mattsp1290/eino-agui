@@ -272,7 +272,11 @@ func DrainAgenticEvents(ctx context.Context, source AgentEventSource, resolver A
 			closeUndrainedAgentEventStream(event)
 			var cancelled *adk.CancelError
 			if errors.As(event.Err, &cancelled) {
-				result.Cancellations = append(result.Cancellations, CancellationCandidate{Identity: resolution.Identity, Cancellation: projectCancel(cancelled)})
+				cancellation, err := projectCancel(cancelled)
+				if err != nil {
+					return finish(fmt.Errorf("project cancellation: %w", err), true)
+				}
+				result.Cancellations = append(result.Cancellations, CancellationCandidate{Identity: resolution.Identity, Cancellation: cancellation})
 				return finish(nil, false)
 			}
 			return finish(event.Err, true)
@@ -452,38 +456,44 @@ func projectInterrupt(info *adk.InterruptInfo, pauseID string, correlation *conv
 	return out, nil
 }
 
-func projectCancel(cancelled *adk.CancelError) convert.CancelledV1 {
-	out := convert.CancelledV1{RequestedMode: "unknown", ObservedMode: "unknown", Classification: "safe_point"}
+func projectCancel(cancelled *adk.CancelError) (convert.CancelledV1, error) {
 	if cancelled == nil || cancelled.Info == nil {
-		return out
+		return convert.CancelledV1{}, errors.New("cancellation info is required")
 	}
-	out.RequestedMode = cancelModeName(cancelled.Info.Mode)
+	requested, ok := cancelModeName(cancelled.Info.Mode)
+	if !ok {
+		return convert.CancelledV1{}, errors.New("cancellation mode is invalid")
+	}
+	if requested == convert.CancellationModeImmediate && (cancelled.Info.Escalated || cancelled.Info.Timeout) {
+		return convert.CancelledV1{}, errors.New("immediate cancellation cannot be escalated")
+	}
+	out := convert.CancelledV1{RequestedMode: requested, ObservedMode: requested, Classification: convert.CancellationClassSafePoint}
 	out.ObservedMode = out.RequestedMode
-	if cancelled.Info.Escalated {
-		out.ObservedMode = cancelModeName(adk.CancelImmediate)
-		out.Classification = "escalated"
+	if cancelled.Info.Escalated || cancelled.Info.Timeout {
+		out.ObservedMode = convert.CancellationModeImmediate
+		out.Classification = convert.CancellationClassEscalated
 	}
 	if cancelled.Info.Timeout {
-		out.Classification = "timeout"
+		out.Classification = convert.CancellationClassTimeout
 	}
 	if cancelled.Info.Mode == adk.CancelImmediate {
-		out.Classification = "immediate"
+		out.Classification = convert.CancellationClassImmediate
 	}
-	return out
+	return out, nil
 }
 
-func cancelModeName(mode adk.CancelMode) string {
+func cancelModeName(mode adk.CancelMode) (convert.CancellationModeV1, bool) {
 	switch mode {
 	case adk.CancelImmediate:
-		return "immediate"
+		return convert.CancellationModeImmediate, true
 	case adk.CancelAfterChatModel:
-		return "after_chat_model"
+		return convert.CancellationModeAfterChatModel, true
 	case adk.CancelAfterToolCalls:
-		return "after_tool_calls"
+		return convert.CancellationModeAfterToolCalls, true
 	case adk.CancelAfterChatModel | adk.CancelAfterToolCalls:
-		return "after_chat_model_or_tool_calls"
+		return convert.CancellationModeAfterChatOrToolCalls, true
 	default:
-		return "unknown"
+		return "", false
 	}
 }
 

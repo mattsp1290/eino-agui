@@ -790,9 +790,9 @@ func TestCommittedLifecycleWrappers(t *testing.T) {
 			return e.Paused(convert.PausedV1{PauseID: "pause", Targets: []convert.InterruptTargetV1{{ID: "interrupt", Address: "agent:root"}}}, r)
 		}, []string{"CUSTOM"}},
 		{"cancelled", convert.EnvelopeCancelled, root, func(v *convert.AgenticEnvelopeV1) {
-			v.Cancelled = &convert.CancelledV1{RequestedMode: "graceful", ObservedMode: "immediate", Classification: "timeout"}
+			v.Cancelled = &convert.CancelledV1{RequestedMode: convert.CancellationModeAfterChatModel, ObservedMode: convert.CancellationModeImmediate, Classification: convert.CancellationClassTimeout}
 		}, func(e *Emitter, r convert.CommitReceiptV1) bool {
-			return e.Cancelled(convert.CancelledV1{RequestedMode: "graceful", ObservedMode: "immediate", Classification: "timeout"}, r)
+			return e.Cancelled(convert.CancelledV1{RequestedMode: convert.CancellationModeAfterChatModel, ObservedMode: convert.CancellationModeImmediate, Classification: convert.CancellationClassTimeout}, r)
 		}, []string{"CUSTOM"}},
 		{"subagent started", convert.EnvelopeSubagentStarted, nested, func(v *convert.AgenticEnvelopeV1) { v.Lifecycle = &convert.LifecycleFactV1{} }, func(e *Emitter, r convert.CommitReceiptV1) bool {
 			return e.SubagentStartedCommitted(convert.LifecycleFactV1{}, r)

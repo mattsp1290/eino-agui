@@ -331,10 +331,28 @@ type ResumedV1 struct {
 	NewAttemptID string                        `json:"newAttemptId"`
 	Correlation  *ApprovalInterruptCorrelation `json:"correlation,omitempty"`
 }
+type CancellationModeV1 string
+
+const (
+	CancellationModeImmediate            CancellationModeV1 = "immediate"
+	CancellationModeAfterChatModel       CancellationModeV1 = "after_chat_model"
+	CancellationModeAfterToolCalls       CancellationModeV1 = "after_tool_calls"
+	CancellationModeAfterChatOrToolCalls CancellationModeV1 = "after_chat_model_or_tool_calls"
+)
+
+type CancellationClassificationV1 string
+
+const (
+	CancellationClassImmediate CancellationClassificationV1 = "immediate"
+	CancellationClassSafePoint CancellationClassificationV1 = "safe_point"
+	CancellationClassEscalated CancellationClassificationV1 = "escalated"
+	CancellationClassTimeout   CancellationClassificationV1 = "timeout"
+)
+
 type CancelledV1 struct {
-	RequestedMode  string `json:"requestedMode"`
-	ObservedMode   string `json:"observedMode"`
-	Classification string `json:"classification"`
+	RequestedMode  CancellationModeV1           `json:"requestedMode"`
+	ObservedMode   CancellationModeV1           `json:"observedMode"`
+	Classification CancellationClassificationV1 `json:"classification"`
 }
 type TurnStartedV1 = LifecycleFactV1
 type TurnFinishedV1 = LifecycleFactV1

@@ -51,6 +51,11 @@ call/result payloads carry `executionOwner: provider_mcp`. These closed markers
 make both provider-owned families explicitly distinct from host-local function
 tools without relying on names or call-ID conventions.
 
+Cancellation uses closed mode and classification constants. Unknown Eino mode
+bits, missing cancellation information, and combinations that contradict the
+requested/observed safe-point or escalation semantics fail before becoming a
+candidate.
+
 Projection uses explicit positive limits before cloning or encoding. Arbitrary
 server-tool values must be acyclic JSON-compatible data. Provider annotations
 are allowlisted. Raw `Extra`, arbitrary extension values, reasoning signatures,

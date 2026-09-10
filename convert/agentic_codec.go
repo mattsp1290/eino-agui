@@ -1080,8 +1080,10 @@ func validateEnvelope(value *AgenticEnvelopeV1, verifyDigest bool) error {
 			return errors.New("resume requires new turn and attempt IDs")
 		}
 	}
-	if value.Cancelled != nil && (value.Cancelled.RequestedMode == "" || value.Cancelled.ObservedMode == "" || value.Cancelled.Classification == "") {
-		return errors.New("cancellation modes and classification are required")
+	if value.Cancelled != nil {
+		if err := validateCancellation(value.Cancelled); err != nil {
+			return err
+		}
 	}
 	if verifyDigest {
 		if value.Digest == "" {
@@ -1099,6 +1101,38 @@ func validateEnvelope(value *AgenticEnvelopeV1, verifyDigest bool) error {
 		}
 	}
 	return nil
+}
+
+func validateCancellation(cancelled *CancelledV1) error {
+	if cancelled == nil || !validCancellationMode(cancelled.RequestedMode) || !validCancellationMode(cancelled.ObservedMode) {
+		return errors.New("cancellation modes are invalid")
+	}
+	switch cancelled.Classification {
+	case CancellationClassImmediate:
+		if cancelled.RequestedMode != CancellationModeImmediate || cancelled.ObservedMode != CancellationModeImmediate {
+			return errors.New("immediate cancellation requires immediate requested and observed modes")
+		}
+	case CancellationClassSafePoint:
+		if cancelled.RequestedMode == CancellationModeImmediate || cancelled.ObservedMode != cancelled.RequestedMode {
+			return errors.New("safe-point cancellation requires one matching graceful mode")
+		}
+	case CancellationClassEscalated, CancellationClassTimeout:
+		if cancelled.RequestedMode == CancellationModeImmediate || cancelled.ObservedMode != CancellationModeImmediate {
+			return errors.New("escalated cancellation requires a graceful request and immediate observation")
+		}
+	default:
+		return errors.New("cancellation classification is invalid")
+	}
+	return nil
+}
+
+func validCancellationMode(mode CancellationModeV1) bool {
+	switch mode {
+	case CancellationModeImmediate, CancellationModeAfterChatModel, CancellationModeAfterToolCalls, CancellationModeAfterChatOrToolCalls:
+		return true
+	default:
+		return false
+	}
 }
 
 func validatePublicContentBlock(block *PublicContentBlock) error {

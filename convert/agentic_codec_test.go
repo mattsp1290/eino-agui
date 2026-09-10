@@ -366,6 +366,132 @@ func TestForbiddenProviderSentinelsNeverReachProjectionWireOrErrors(t *testing.T
 	}
 }
 
+func TestProjectionDeeplyDetachesNestedPublicShapes(t *testing.T) {
+	t.Parallel()
+	snapshot := func(value any) []byte {
+		t.Helper()
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return encoded
+	}
+	assertUnchanged := func(name string, before []byte, value any) {
+		t.Helper()
+		after := snapshot(value)
+		if !bytes.Equal(before, after) {
+			t.Fatalf("%s changed:\nbefore %s\nafter  %s", name, before, after)
+		}
+	}
+
+	code := int64(9)
+	serverArguments := map[string]any{"nested": []any{map[string]any{"value": "original"}}}
+	inputSchema := &jsonschema.Schema{Type: "object", Required: []string{"query"}}
+	assistant := &schema.AgenticMessage{
+		Role: schema.AgenticRoleTypeAssistant,
+		ContentBlocks: []*schema.ContentBlock{
+			schema.NewContentBlock(&schema.AssistantGenText{Text: "hello", ClaudeExtension: &claude.AssistantGenTextExtension{Citations: []*claude.TextCitation{{
+				Type:                    claude.TextCitationTypeWebSearchResultLocation,
+				WebSearchResultLocation: &claude.CitationWebSearchResultLocation{CitedText: "hello", Title: "source", URL: "https://example.test/source"},
+			}}}}),
+			schema.NewContentBlock(&schema.ServerToolCall{CallID: "server", Name: "search", Arguments: serverArguments}),
+			schema.NewContentBlock(&schema.MCPToolResult{ServerLabel: "mcp", CallID: "mcp-call", Name: "lookup", Content: `{}`, Error: &schema.MCPToolCallError{Code: &code, Message: "failed"}}),
+			schema.NewContentBlock(&schema.MCPListToolsResult{ServerLabel: "mcp", Tools: []*schema.MCPListToolsItem{{Name: "lookup", Description: "lookup", InputSchema: inputSchema}}}),
+		},
+		ResponseMeta: &schema.AgenticResponseMeta{
+			TokenUsage: &schema.TokenUsage{PromptTokens: 3, CompletionTokens: 2, TotalTokens: 5},
+			GeminiExtension: &gemini.ResponseMetaExtension{FinishReason: "STOP", GroundingMeta: &gemini.GroundingMetadata{
+				GroundingChunks: []*gemini.GroundingChunk{{Web: &gemini.GroundingChunkWeb{Domain: "example.test", Title: "source", URI: "https://example.test/source"}}},
+				GroundingSupports: []*gemini.GroundingSupport{{
+					ConfidenceScores: []float32{0.75}, GroundingChunkIndices: []int{0},
+					Segment: &gemini.Segment{PartIndex: 0, StartIndex: 0, EndIndex: 5, Text: "hello"},
+				}},
+				WebSearchQueries: []string{"query"},
+			}},
+		},
+	}
+	assistantContext := testContext(
+		AgenticBlockContext{BlockID: "text"},
+		AgenticBlockContext{BlockID: "server", ProviderServerID: "provider"},
+		AgenticBlockContext{BlockID: "mcp-result"},
+		AgenticBlockContext{BlockID: "mcp-list"},
+	)
+	assistantInput := struct {
+		Message *schema.AgenticMessage
+		Context AgenticProjectionContext
+	}{assistant, assistantContext}
+	assistantBefore := snapshot(assistantInput)
+	projection, err := ToAgenticProjection(assistant, assistantContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	public := projection.Public
+	public.Identity.AgentPath[0].Name = "mutated-output"
+	public.ContentBlocks[0].Identity.AgentPath[0].RunID = "mutated-output"
+	*public.ContentBlocks[0].Text = "mutated-output"
+	public.ContentBlocks[0].ProviderAnnotations.Claude[0].URL = "https://mutated.invalid"
+	public.ContentBlocks[1].ServerToolCall.Arguments.(map[string]any)["nested"].([]any)[0].(map[string]any)["value"] = "mutated-output"
+	*public.ContentBlocks[2].MCPToolResult.Error.Code = 10
+	public.ContentBlocks[3].MCPListToolsResult.Tools[0].InputSchema[0] = 'X'
+	*public.ResponseMeta.TokenUsage.InputTokens = 99
+	public.ResponseMeta.GeminiGrounding.Chunks[0].URI = "https://mutated.invalid"
+	public.ResponseMeta.GeminiGrounding.Supports[0].ConfidenceScores[0] = 0.1
+	public.ResponseMeta.GeminiGrounding.Supports[0].GroundingChunkIndices[0] = 99
+	public.ResponseMeta.GeminiGrounding.WebSearchQueries[0] = "mutated-output"
+	assertUnchanged("assistant input after output mutation", assistantBefore, assistantInput)
+
+	freshAssistant, err := ToAgenticProjection(assistant, assistantContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	freshAssistantBefore := snapshot(freshAssistant.Public)
+	assistant.ContentBlocks[0].AssistantGenText.Text = "mutated-input"
+	assistant.ContentBlocks[0].AssistantGenText.ClaudeExtension.Citations[0].WebSearchResultLocation.URL = "https://mutated-input.invalid"
+	serverArguments["nested"].([]any)[0].(map[string]any)["value"] = "mutated-input"
+	code = 11
+	inputSchema.Required[0] = "mutated-input"
+	assistant.ResponseMeta.TokenUsage.PromptTokens = 100
+	grounding := assistant.ResponseMeta.GeminiExtension.GroundingMeta
+	grounding.GroundingChunks[0].Web.URI = "https://mutated-input.invalid"
+	grounding.GroundingSupports[0].ConfidenceScores[0] = 0.2
+	grounding.GroundingSupports[0].GroundingChunkIndices[0] = 7
+	grounding.WebSearchQueries[0] = "mutated-input"
+	assistantContext.Identity.AgentPath[0].Name = "mutated-input"
+	assertUnchanged("assistant projection after input mutation", freshAssistantBefore, freshAssistant.Public)
+
+	parameter := &schema.ParameterInfo{Type: schema.String, Enum: []string{"one", "two"}, Required: true}
+	resultPart := &schema.FunctionToolResultContentBlock{Type: schema.FunctionToolResultContentBlockTypeImage, Image: &schema.UserInputImage{URL: "https://example.test/image", MIMEType: "image/png"}}
+	user := &schema.AgenticMessage{Role: schema.AgenticRoleTypeUser, ContentBlocks: []*schema.ContentBlock{
+		schema.NewContentBlock(&schema.ToolSearchFunctionToolResult{CallID: "search", Name: "search", Result: &schema.ToolSearchResult{Tools: []*schema.ToolInfo{{Name: "lookup", ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{"choice": parameter})}}}}),
+		schema.NewContentBlock(&schema.FunctionToolResult{CallID: "call", Name: "lookup", Content: []*schema.FunctionToolResultContentBlock{resultPart}}),
+	}}
+	userContext := testContext(AgenticBlockContext{BlockID: "search"}, AgenticBlockContext{BlockID: "result"})
+	userInput := struct {
+		Message *schema.AgenticMessage
+		Context AgenticProjectionContext
+	}{user, userContext}
+	userBefore := snapshot(userInput)
+	userProjection, err := ToAgenticProjection(user, userContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userProjection.Public.ContentBlocks[0].ToolSearchResult.Tools[0].Params["choice"].Enum[0] = "mutated-output"
+	userProjection.Public.ContentBlocks[0].ToolSearchResult.Tools[0].Params["added"] = &PublicParameterInfo{Type: schema.String}
+	userProjection.Public.ContentBlocks[1].FunctionToolResult.Content[0].Media.URL = "https://mutated-output.invalid"
+	assertUnchanged("user input after output mutation", userBefore, userInput)
+
+	freshUser, err := ToAgenticProjection(user, userContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	freshUserBefore := snapshot(freshUser.Public)
+	parameter.Enum[0] = "mutated-input"
+	parameter.Desc = "mutated-input"
+	resultPart.Image.URL = "https://mutated-input.invalid"
+	userContext.Identity.AgentPath[0].RunID = "mutated-input"
+	assertUnchanged("user projection after input mutation", freshUserBefore, freshUser.Public)
+}
+
 func TestEnvelopeStrictDecodeAndDigest(t *testing.T) {
 	t.Parallel()
 	envelope := &AgenticEnvelopeV1{Version: 1, Kind: EnvelopeTurnFinished, Identity: testIdentity(), Lifecycle: &LifecycleFactV1{Detail: "committed"}}
@@ -417,6 +543,24 @@ func TestAttemptReplacementRequiresCauseAndSemantics(t *testing.T) {
 		envelope := &AgenticEnvelopeV1{Version: AgenticSchemaVersion, Kind: EnvelopeAttemptReplaced, Identity: id, AttemptReplaced: &replacement}
 		if _, err := LifecycleDigestV1(envelope); err == nil {
 			t.Fatalf("replacement %#v unexpectedly validated", replacement)
+		}
+	}
+}
+
+func TestCancellationContractRejectsUnknownAndInconsistentValues(t *testing.T) {
+	t.Parallel()
+	tests := []CancelledV1{
+		{RequestedMode: "unknown", ObservedMode: CancellationModeImmediate, Classification: CancellationClassEscalated},
+		{RequestedMode: CancellationModeAfterChatModel, ObservedMode: "unknown", Classification: CancellationClassEscalated},
+		{RequestedMode: CancellationModeImmediate, ObservedMode: CancellationModeImmediate, Classification: "unknown"},
+		{RequestedMode: CancellationModeAfterChatModel, ObservedMode: CancellationModeImmediate, Classification: CancellationClassSafePoint},
+		{RequestedMode: CancellationModeImmediate, ObservedMode: CancellationModeImmediate, Classification: CancellationClassTimeout},
+		{RequestedMode: CancellationModeAfterToolCalls, ObservedMode: CancellationModeAfterToolCalls, Classification: CancellationClassEscalated},
+	}
+	for _, cancelled := range tests {
+		envelope := &AgenticEnvelopeV1{Version: AgenticSchemaVersion, Kind: EnvelopeCancelled, Identity: testIdentity(), Cancelled: &cancelled}
+		if _, err := LifecycleDigestV1(envelope); err == nil {
+			t.Fatalf("invalid cancellation was accepted: %#v", cancelled)
 		}
 	}
 }

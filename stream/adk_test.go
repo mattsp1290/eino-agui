@@ -193,15 +193,16 @@ func TestDrainAgenticEventsClassifiesCancellation(t *testing.T) {
 	tests := []struct {
 		name           string
 		info           *adk.AgentCancelInfo
-		requested      string
-		observed       string
-		classification string
+		requested      convert.CancellationModeV1
+		observed       convert.CancellationModeV1
+		classification convert.CancellationClassificationV1
 	}{
-		{"immediate", &adk.AgentCancelInfo{Mode: adk.CancelImmediate}, "immediate", "immediate", "immediate"},
-		{"chat model safe point", &adk.AgentCancelInfo{Mode: adk.CancelAfterChatModel}, "after_chat_model", "after_chat_model", "safe_point"},
-		{"tool safe point", &adk.AgentCancelInfo{Mode: adk.CancelAfterToolCalls}, "after_tool_calls", "after_tool_calls", "safe_point"},
-		{"graceful escalation", &adk.AgentCancelInfo{Mode: adk.CancelAfterChatModel, Escalated: true}, "after_chat_model", "immediate", "escalated"},
-		{"timeout escalation", &adk.AgentCancelInfo{Mode: adk.CancelAfterToolCalls, Escalated: true, Timeout: true}, "after_tool_calls", "immediate", "timeout"},
+		{"immediate", &adk.AgentCancelInfo{Mode: adk.CancelImmediate}, convert.CancellationModeImmediate, convert.CancellationModeImmediate, convert.CancellationClassImmediate},
+		{"chat model safe point", &adk.AgentCancelInfo{Mode: adk.CancelAfterChatModel}, convert.CancellationModeAfterChatModel, convert.CancellationModeAfterChatModel, convert.CancellationClassSafePoint},
+		{"tool safe point", &adk.AgentCancelInfo{Mode: adk.CancelAfterToolCalls}, convert.CancellationModeAfterToolCalls, convert.CancellationModeAfterToolCalls, convert.CancellationClassSafePoint},
+		{"either safe point", &adk.AgentCancelInfo{Mode: adk.CancelAfterChatModel | adk.CancelAfterToolCalls}, convert.CancellationModeAfterChatOrToolCalls, convert.CancellationModeAfterChatOrToolCalls, convert.CancellationClassSafePoint},
+		{"graceful escalation", &adk.AgentCancelInfo{Mode: adk.CancelAfterChatModel, Escalated: true}, convert.CancellationModeAfterChatModel, convert.CancellationModeImmediate, convert.CancellationClassEscalated},
+		{"timeout escalation", &adk.AgentCancelInfo{Mode: adk.CancelAfterToolCalls, Escalated: true, Timeout: true}, convert.CancellationModeAfterToolCalls, convert.CancellationModeImmediate, convert.CancellationClassTimeout},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -219,6 +220,31 @@ func TestDrainAgenticEventsClassifiesCancellation(t *testing.T) {
 			}
 			if !sameStreamIdentity(result.Cancellations[0].Identity, agenticIDs()) {
 				t.Fatalf("cancellation identity = %#v", result.Cancellations[0].Identity)
+			}
+		})
+	}
+}
+
+func TestDrainAgenticEventsRejectsMalformedCancellation(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		info *adk.AgentCancelInfo
+	}{
+		{"missing info", nil},
+		{"unknown mode", &adk.AgentCancelInfo{Mode: adk.CancelMode(1 << 7)}},
+		{"immediate escalation", &adk.AgentCancelInfo{Mode: adk.CancelImmediate, Escalated: true}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			event := &adk.TypedAgentEvent[*schema.AgenticMessage]{Err: &adk.CancelError{Info: tc.info}}
+			source := &scriptedAgentEventSource{events: []*adk.TypedAgentEvent[*schema.AgenticMessage]{event}}
+			result, err := DrainAgenticEvents(t.Context(), source, testEventResolver{})
+			if err == nil || result == nil || !result.Partial || len(result.Cancellations) != 0 {
+				t.Fatalf("result=%#v err=%v", result, err)
+			}
+			if source.aborts.Load() != 1 || source.waits.Load() != 1 {
+				t.Fatalf("aborts=%d waits=%d", source.aborts.Load(), source.waits.Load())
 			}
 		})
 	}
