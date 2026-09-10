@@ -682,6 +682,74 @@ func TestBoundedCounterRejectsIntegerOverflow(t *testing.T) {
 	}
 }
 
+func TestProviderCitationVariantsAndRanges(t *testing.T) {
+	t.Parallel()
+	const text = "café source"
+	annotated := schema.NewContentBlock(&schema.AssistantGenText{
+		Text: text,
+		OpenAIExtension: &openai.AssistantGenTextExtension{Annotations: []*openai.TextAnnotation{
+			{Type: openai.TextAnnotationTypeFileCitation, FileCitation: &openai.TextAnnotationFileCitation{FileID: "file", Filename: "source.txt", Index: 1}},
+			{Type: openai.TextAnnotationTypeURLCitation, URLCitation: &openai.TextAnnotationURLCitation{Title: "source", URL: "https://example.test", StartIndex: 6, EndIndex: 12}},
+			{Type: openai.TextAnnotationTypeContainerFileCitation, ContainerFileCitation: &openai.TextAnnotationContainerFileCitation{ContainerID: "container", FileID: "file", Filename: "source.txt", StartIndex: 6, EndIndex: 12}},
+			{Type: openai.TextAnnotationTypeFilePath, FilePath: &openai.TextAnnotationFilePath{FileID: "file", Index: 2}},
+		}},
+		ClaudeExtension: &claude.AssistantGenTextExtension{Citations: []*claude.TextCitation{
+			{Type: claude.TextCitationTypeCharLocation, CharLocation: &claude.CitationCharLocation{CitedText: "chars", DocumentTitle: "doc", DocumentIndex: 0, StartCharIndex: 1, EndCharIndex: 2}},
+			{Type: claude.TextCitationTypePageLocation, PageLocation: &claude.CitationPageLocation{CitedText: "pages", DocumentTitle: "doc", DocumentIndex: 0, StartPageNumber: 3, EndPageNumber: 4}},
+			{Type: claude.TextCitationTypeContentBlockLocation, ContentBlockLocation: &claude.CitationContentBlockLocation{CitedText: "block", DocumentTitle: "doc", DocumentIndex: 0, StartBlockIndex: 5, EndBlockIndex: 6}},
+			{Type: claude.TextCitationTypeWebSearchResultLocation, WebSearchResultLocation: &claude.CitationWebSearchResultLocation{CitedText: "web", Title: "source", URL: "https://example.test"}},
+		}},
+	})
+	message := &schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{
+		schema.NewContentBlock(&schema.AssistantGenText{Text: "unrelated"}),
+		annotated,
+	}}
+	projected, err := ProjectAgenticMessage(message, testContext(AgenticBlockContext{BlockID: "plain"}, AgenticBlockContext{BlockID: "annotated"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	annotations := projected.ContentBlocks[1].ProviderAnnotations
+	if annotations == nil || len(annotations.OpenAI) != 4 || len(annotations.Claude) != 4 {
+		t.Fatalf("annotations = %#v", annotations)
+	}
+	urlCitation := annotations.OpenAI[1]
+	if got := (*projected.ContentBlocks[1].Text)[urlCitation.StartIndex:urlCitation.EndIndex]; got != "source" {
+		t.Fatalf("reconstructed citation span = %q", got)
+	}
+	if projected.ContentBlocks[0].ProviderAnnotations != nil {
+		t.Fatal("annotations were associated with the wrong assistant text block")
+	}
+
+	invalid := []struct {
+		name       string
+		annotation *openai.TextAnnotation
+		citation   *claude.TextCitation
+	}{
+		{name: "OpenAI negative", annotation: &openai.TextAnnotation{Type: openai.TextAnnotationTypeURLCitation, URLCitation: &openai.TextAnnotationURLCitation{URL: "https://example.test", StartIndex: -1, EndIndex: 1}}},
+		{name: "OpenAI reversed", annotation: &openai.TextAnnotation{Type: openai.TextAnnotationTypeURLCitation, URLCitation: &openai.TextAnnotationURLCitation{URL: "https://example.test", StartIndex: 6, EndIndex: 5}}},
+		{name: "OpenAI out of range", annotation: &openai.TextAnnotation{Type: openai.TextAnnotationTypeURLCitation, URLCitation: &openai.TextAnnotationURLCitation{URL: "https://example.test", StartIndex: 6, EndIndex: 99}}},
+		{name: "OpenAI mid rune", annotation: &openai.TextAnnotation{Type: openai.TextAnnotationTypeURLCitation, URLCitation: &openai.TextAnnotationURLCitation{URL: "https://example.test", StartIndex: 4, EndIndex: 5}}},
+		{name: "OpenAI ambiguous", annotation: &openai.TextAnnotation{Type: openai.TextAnnotationTypeURLCitation, URLCitation: &openai.TextAnnotationURLCitation{URL: "https://example.test", StartIndex: 0, EndIndex: 1}, FileCitation: &openai.TextAnnotationFileCitation{FileID: "file"}}},
+		{name: "Claude negative", citation: &claude.TextCitation{Type: claude.TextCitationTypeCharLocation, CharLocation: &claude.CitationCharLocation{DocumentIndex: -1, StartCharIndex: 0, EndCharIndex: 1}}},
+		{name: "Claude reversed", citation: &claude.TextCitation{Type: claude.TextCitationTypePageLocation, PageLocation: &claude.CitationPageLocation{StartPageNumber: 2, EndPageNumber: 1}}},
+		{name: "Claude ambiguous", citation: &claude.TextCitation{Type: claude.TextCitationTypeCharLocation, CharLocation: &claude.CitationCharLocation{StartCharIndex: 0, EndCharIndex: 1}, PageLocation: &claude.CitationPageLocation{StartPageNumber: 0, EndPageNumber: 1}}},
+	}
+	for _, tc := range invalid {
+		t.Run(tc.name, func(t *testing.T) {
+			value := &schema.AssistantGenText{Text: text}
+			if tc.annotation != nil {
+				value.OpenAIExtension = &openai.AssistantGenTextExtension{Annotations: []*openai.TextAnnotation{tc.annotation}}
+			}
+			if tc.citation != nil {
+				value.ClaudeExtension = &claude.AssistantGenTextExtension{Citations: []*claude.TextCitation{tc.citation}}
+			}
+			if _, err := ProjectAgenticMessage(&schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{schema.NewContentBlock(value)}}, testContext(AgenticBlockContext{BlockID: "text"})); err == nil {
+				t.Fatal("invalid citation was accepted")
+			}
+		})
+	}
+}
+
 func TestGeminiGroundingTargetsExactAssistantTextBlock(t *testing.T) {
 	t.Parallel()
 	message := &schema.AgenticMessage{
