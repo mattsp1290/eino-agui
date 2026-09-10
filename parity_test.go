@@ -41,8 +41,10 @@ func TestParityGoldenFixtures(t *testing.T) {
 				"TestToolStartParentAndReasoningRole",
 				"TestEmitCommittedProjectionModes",
 				"TestAllAgenticContentKindsPassPinnedWireDecoders",
+				"TestCommittedMixedBlocksPreserveExactNativeAndCustomOrder",
 				"TestCommittedProjectionEmitsResponseMetadata",
 				"TestCommittedPauseResumeOrderingAndTargets",
+				"TestTwoCommittedTurnsRequireOneExplicitRunTerminal",
 			},
 		},
 		{
@@ -55,6 +57,7 @@ func TestParityGoldenFixtures(t *testing.T) {
 				"TestStreamUsageMapsToRunEndings",
 				"TestStreamAgenticTurnCorrelatesIndexedChunks",
 				"TestStreamAgenticTurnAllAssistantContentKinds",
+				"TestStreamAgenticTurnDetachesRealObserverOnWriteAndFlushErrors",
 				"TestDrainAgenticEventsCompleteAndStreamingMessages",
 				"TestDrainAgenticEventsStreamsAllUserContentKinds",
 			},

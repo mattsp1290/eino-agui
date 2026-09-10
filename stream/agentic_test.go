@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/encoding/sse"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 
@@ -33,6 +35,10 @@ type contextClosingAgenticModel struct {
 type sliceMutatingAgenticModel struct {
 	chunks []*schema.AgenticMessage
 }
+
+type agenticErrorWriter struct{}
+
+func (agenticErrorWriter) Write([]byte) (int, error) { return 0, errors.New("broken pipe") }
 
 func (m sliceMutatingAgenticModel) Generate(context.Context, []*schema.AgenticMessage, ...model.Option) (*schema.AgenticMessage, error) {
 	return nil, errors.New("not used")
@@ -237,6 +243,32 @@ func TestStreamAgenticTurnCancelledObserverDoesNotCancelExecution(t *testing.T) 
 	}
 	if len(sseSink.Bytes()) != 0 {
 		t.Fatalf("cancelled observer bytes = %q", sseSink.Bytes())
+	}
+}
+
+func TestStreamAgenticTurnDetachesRealObserverOnWriteAndFlushErrors(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		writer func() *bufio.Writer
+	}{
+		{"flush", func() *bufio.Writer { return bufio.NewWriter(agenticErrorWriter{}) }},
+		{"write", func() *bufio.Writer { return bufio.NewWriterSize(agenticErrorWriter{}, 1) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			emit := emitter.NewObserverEmitter(t.Context(), tc.writer(), sse.NewSSEWriter())
+			observer := emitter.NewObserverSink(emit)
+			result, err := StreamAgenticTurn(
+				t.Context(), testmodel.NewAgenticReplayModel(testmodel.AgenticTextChunks(0, "complete")), nil,
+				agenticIDs(), testBlockResolver{0: {BlockID: "text"}}, WithTransientSink(observer),
+			)
+			if err != nil || result == nil || result.Partial || result.PublicProjection == nil || result.ObserverErr == nil {
+				t.Fatalf("result=%#v err=%v", result, err)
+			}
+			if emit.Err() == nil || observer.Err() == nil || len(result.DeliveredTransient) != 0 {
+				t.Fatalf("emitter=%v observer=%v delivered=%d", emit.Err(), observer.Err(), len(result.DeliveredTransient))
+			}
+		})
 	}
 }
 

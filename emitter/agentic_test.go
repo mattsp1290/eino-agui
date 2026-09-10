@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -269,6 +270,52 @@ func TestEmitCommittedProjectionModes(t *testing.T) {
 	}
 }
 
+func TestCommittedMixedBlocksPreserveExactNativeAndCustomOrder(t *testing.T) {
+	t.Parallel()
+	id := agenticProjection(t).Public.Identity
+	assistant, err := convert.ToAgenticProjection(
+		&schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{
+			schema.NewContentBlock(&schema.Reasoning{Text: "reason"}),
+			schema.NewContentBlock(&schema.AssistantGenText{Text: "answer"}),
+			schema.NewContentBlock(&schema.FunctionToolCall{CallID: "call", Name: "lookup", Arguments: `{}`}),
+			schema.NewContentBlock(&schema.AssistantGenImage{URL: "https://example.test/image"}),
+		}},
+		convert.AgenticProjectionContext{Identity: id, Blocks: []convert.AgenticBlockContext{{BlockID: "reason"}, {BlockID: "text"}, {BlockID: "call"}, {BlockID: "image"}}, Limits: convert.DefaultProjectionLimits()},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultID := id
+	resultID.MessageID = "result-message"
+	result, err := convert.ToAgenticProjection(
+		&schema.AgenticMessage{Role: schema.AgenticRoleTypeUser, ContentBlocks: []*schema.ContentBlock{schema.NewContentBlock(&schema.FunctionToolResult{
+			CallID: "call", Name: "lookup", Content: []*schema.FunctionToolResultContentBlock{{Type: schema.FunctionToolResultContentBlockTypeText, Text: &schema.UserInputText{Text: "result"}}},
+		})}},
+		convert.AgenticProjectionContext{Identity: resultID, Blocks: []convert.AgenticBlockContext{{BlockID: "result"}}, Limits: convert.DefaultProjectionLimits()},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := testsse.NewSink()
+	emit := NewObserverEmitter(t.Context(), sink.Writer(), sink.SSEWriter())
+	for i, projection := range []*convert.AgenticProjection{assistant, result} {
+		receipt := convert.CommitReceiptV1{Revision: fmt.Sprintf("revision-%d", i), Domain: "projection", Identity: projection.Public.Identity, Digest: projection.Digest}
+		if !emit.EmitCommittedProjection(projection, receipt, DeliveryModeReplay) {
+			t.Fatalf("emit %d failed: %v / %v", i, emit.Err(), emit.EncErr())
+		}
+	}
+	want := []string{
+		"REASONING_START", "REASONING_MESSAGE_START", "REASONING_MESSAGE_CONTENT", "REASONING_MESSAGE_END", "REASONING_END", "CUSTOM",
+		"TEXT_MESSAGE_START", "TEXT_MESSAGE_CONTENT", "TEXT_MESSAGE_END", "CUSTOM",
+		"TOOL_CALL_START", "TOOL_CALL_ARGS", "TOOL_CALL_END", "CUSTOM",
+		"CUSTOM",
+		"TOOL_CALL_RESULT", "CUSTOM",
+	}
+	if got := golden.FrameTypes(normalizedFrames(t, sink)); !reflect.DeepEqual(got, want) {
+		t.Fatalf("types = %v, want %v", got, want)
+	}
+}
+
 func TestCommittedProjectionEmitsResponseMetadata(t *testing.T) {
 	t.Parallel()
 	id := agenticProjection(t).Public.Identity
@@ -518,6 +565,72 @@ func TestTurnFinishedIsCustomOnlyAndRunTerminalRequiresSettlement(t *testing.T) 
 	}
 	if got := golden.FrameTypes(normalizedFrames(t, sink)); !reflect.DeepEqual(got, []string{"CUSTOM"}) {
 		t.Fatalf("types = %v", got)
+	}
+}
+
+func TestTwoCommittedTurnsRequireOneExplicitRunTerminal(t *testing.T) {
+	t.Parallel()
+	sink := testsse.NewSink()
+	emit := NewObserverEmitter(t.Context(), sink.Writer(), sink.SSEWriter())
+	turnOne := agenticProjection(t).Public.Identity
+	turnTwo := turnOne
+	turnTwo.TurnID = "turn-2"
+	turnTwo.MessageID = "message-2"
+	turnTwo.AttemptID = "attempt-2"
+	emitFact := func(revision string, kind convert.AgenticEnvelopeKind, identity convert.AgenticIdentityV1, fact convert.LifecycleFactV1) bool {
+		envelope := &convert.AgenticEnvelopeV1{Version: convert.AgenticSchemaVersion, Kind: kind, Identity: identity, Lifecycle: &fact}
+		digest, err := convert.LifecycleDigestV1(envelope)
+		if err != nil {
+			t.Fatal(err)
+		}
+		receipt := convert.CommitReceiptV1{Revision: revision, Domain: "lifecycle", Kind: kind, Identity: identity, Digest: digest}
+		switch kind {
+		case convert.EnvelopeRunStarted:
+			return emit.RunStartedCommitted(fact, receipt)
+		case convert.EnvelopeTurnStarted:
+			return emit.TurnStarted(fact, receipt)
+		case convert.EnvelopeTurnFinished:
+			return emit.TurnFinished(fact, receipt)
+		case convert.EnvelopeRunFinished:
+			return emit.RunFinishedCommitted(fact, receipt)
+		default:
+			t.Fatalf("unsupported lifecycle kind %q", kind)
+			return false
+		}
+	}
+	for _, step := range []struct {
+		revision string
+		kind     convert.AgenticEnvelopeKind
+		identity convert.AgenticIdentityV1
+		fact     convert.LifecycleFactV1
+	}{
+		{"run-start", convert.EnvelopeRunStarted, turnOne, convert.LifecycleFactV1{}},
+		{"turn-1-start", convert.EnvelopeTurnStarted, turnOne, convert.LifecycleFactV1{}},
+		{"turn-1-finish", convert.EnvelopeTurnFinished, turnOne, convert.LifecycleFactV1{Detail: "done"}},
+	} {
+		if !emitFact(step.revision, step.kind, step.identity, step.fact) {
+			t.Fatalf("%s failed: %v / %v", step.revision, emit.Err(), emit.EncErr())
+		}
+	}
+	if got := golden.FrameTypes(normalizedFrames(t, sink)); !reflect.DeepEqual(got, []string{"RUN_STARTED", "CUSTOM", "CUSTOM", "CUSTOM"}) {
+		t.Fatalf("first turn types = %v", got)
+	}
+	for _, step := range []struct {
+		revision string
+		kind     convert.AgenticEnvelopeKind
+		fact     convert.LifecycleFactV1
+	}{
+		{"turn-2-start", convert.EnvelopeTurnStarted, convert.LifecycleFactV1{}},
+		{"turn-2-finish", convert.EnvelopeTurnFinished, convert.LifecycleFactV1{Detail: "done"}},
+		{"run-finish", convert.EnvelopeRunFinished, convert.LifecycleFactV1{LoopSettled: true}},
+	} {
+		if !emitFact(step.revision, step.kind, turnTwo, step.fact) {
+			t.Fatalf("%s failed: %v / %v", step.revision, emit.Err(), emit.EncErr())
+		}
+	}
+	want := []string{"RUN_STARTED", "CUSTOM", "CUSTOM", "CUSTOM", "CUSTOM", "CUSTOM", "RUN_FINISHED", "CUSTOM"}
+	if got := golden.FrameTypes(normalizedFrames(t, sink)); !reflect.DeepEqual(got, want) {
+		t.Fatalf("two-turn types = %v, want %v", got, want)
 	}
 }
 
