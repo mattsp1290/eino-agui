@@ -21,8 +21,8 @@ cp -f "$fixture_dir/consumer_test.go" "$work_dir/consumer_test.go"
 cd "$work_dir"
 
 GOWORK=off go mod init example.com/eino-agui-clean-consumer
-GOWORK=off go mod edit -require="github.com/mattsp1290/eino-agui@$pin"
 GOWORK=off go mod edit -replace="github.com/ag-ui-protocol/ag-ui/sdks/community/go=github.com/mattsp1290/ag-ui/sdks/community/go@v0.0.0-20260909025854-aaa75b54d572"
+GOWORK=off go get "github.com/mattsp1290/eino-agui@$pin"
 GOWORK=off go mod tidy
 GOWORK=off go test ./...
 GOWORK=off go list -m -json all > modules.json
