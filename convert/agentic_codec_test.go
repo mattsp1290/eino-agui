@@ -229,10 +229,36 @@ func TestProviderToolExecutionOwnersAreExplicitAndStrict(t *testing.T) {
 
 func TestProjectRejectsMalformedUnionBeforeReturningProjection(t *testing.T) {
 	t.Parallel()
-	bad := &schema.ContentBlock{Type: schema.ContentBlockTypeReasoning, Reasoning: &schema.Reasoning{Text: "x"}, AssistantGenText: &schema.AssistantGenText{Text: "y"}}
-	_, err := ProjectAgenticMessage(&schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{bad}}, testContext(AgenticBlockContext{BlockID: "block"}))
-	if err == nil || !strings.Contains(err.Error(), "union") {
-		t.Fatalf("error = %v, want union error", err)
+	functionResult := func(part *schema.FunctionToolResultContentBlock) *schema.ContentBlock {
+		return schema.NewContentBlock(&schema.FunctionToolResult{CallID: "call", Name: "lookup", Content: []*schema.FunctionToolResultContentBlock{part}})
+	}
+	tests := []struct {
+		name  string
+		role  schema.AgenticRoleType
+		block *schema.ContentBlock
+	}{
+		{name: "nil block", role: schema.AgenticRoleTypeAssistant},
+		{name: "empty discriminator", role: schema.AgenticRoleTypeAssistant, block: &schema.ContentBlock{}},
+		{name: "unknown discriminator", role: schema.AgenticRoleTypeAssistant, block: &schema.ContentBlock{Type: schema.ContentBlockType("unknown")}},
+		{name: "nil selected payload", role: schema.AgenticRoleTypeAssistant, block: &schema.ContentBlock{Type: schema.ContentBlockTypeReasoning}},
+		{name: "mismatched payload", role: schema.AgenticRoleTypeAssistant, block: &schema.ContentBlock{Type: schema.ContentBlockTypeReasoning, AssistantGenText: &schema.AssistantGenText{Text: "text"}}},
+		{name: "ambiguous outer payload", role: schema.AgenticRoleTypeAssistant, block: &schema.ContentBlock{Type: schema.ContentBlockTypeReasoning, Reasoning: &schema.Reasoning{Text: "reason"}, AssistantGenText: &schema.AssistantGenText{Text: "text"}}},
+		{name: "nil nested result", role: schema.AgenticRoleTypeUser, block: functionResult(nil)},
+		{name: "empty nested discriminator", role: schema.AgenticRoleTypeUser, block: functionResult(&schema.FunctionToolResultContentBlock{})},
+		{name: "mismatched nested payload", role: schema.AgenticRoleTypeUser, block: functionResult(&schema.FunctionToolResultContentBlock{Type: schema.FunctionToolResultContentBlockTypeText, Image: &schema.UserInputImage{URL: "https://example.test/image"}})},
+		{name: "ambiguous nested payload", role: schema.AgenticRoleTypeUser, block: functionResult(&schema.FunctionToolResultContentBlock{Type: schema.FunctionToolResultContentBlockTypeText, Text: &schema.UserInputText{Text: "text"}, Image: &schema.UserInputImage{URL: "https://example.test/image"}})},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			projection, err := ProjectAgenticMessage(&schema.AgenticMessage{Role: tc.role, ContentBlocks: []*schema.ContentBlock{tc.block}}, testContext(AgenticBlockContext{BlockID: "block"}))
+			if err == nil || projection != nil {
+				t.Fatalf("projection=%#v error=%v, want typed rejection", projection, err)
+			}
+			var projectionError *ProjectionError
+			if !errors.As(err, &projectionError) || projectionError.Block != 0 || projectionError.Path == "" {
+				t.Fatalf("error = %#v, want block-0 ProjectionError with path", err)
+			}
+		})
 	}
 }
 
