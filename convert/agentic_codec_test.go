@@ -647,6 +647,71 @@ func TestToolDefinitionAppliesLimitsBeforeClone(t *testing.T) {
 	if _, err := projectToolDefinition(tool(parameter), limits); err == nil {
 		t.Fatal("one-over entry count was accepted")
 	}
+
+	jsonTool := func(value *jsonschema.Schema) *schema.ToolInfo {
+		return &schema.ToolInfo{Name: "json-bounded", ParamsOneOf: schema.NewParamsOneOfByJSONSchema(value)}
+	}
+	simpleSchema := &jsonschema.Schema{Type: "string"}
+	nestedSchema := &jsonschema.Schema{Type: "array", Items: &jsonschema.Schema{Type: "string"}}
+	limits = DefaultProjectionLimits()
+	limits.MaxJSONDepth = 2
+	if _, err := projectToolDefinition(jsonTool(simpleSchema), limits); err != nil {
+		t.Fatalf("exact JSON schema depth rejected: %v", err)
+	}
+	if _, err := projectToolDefinition(jsonTool(nestedSchema), limits); err == nil {
+		t.Fatal("one-over JSON schema depth was accepted")
+	}
+
+	limits = DefaultProjectionLimits()
+	limits.MaxJSONEntries = 4
+	enumSchema := &jsonschema.Schema{Type: "string", Enum: []any{"one", "two"}}
+	if _, err := projectToolDefinition(jsonTool(enumSchema), limits); err != nil {
+		t.Fatalf("exact JSON schema entry count rejected: %v", err)
+	}
+	limits.MaxJSONEntries--
+	if _, err := projectToolDefinition(jsonTool(enumSchema), limits); err == nil {
+		t.Fatal("one-over JSON schema entry count was accepted")
+	}
+
+	projected, err := projectToolDefinition(jsonTool(simpleSchema), DefaultProjectionLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits = DefaultProjectionLimits()
+	limits.MaxBlockBytes = len(projected.JSONSchema)
+	if _, err := projectToolDefinition(jsonTool(simpleSchema), limits); err != nil {
+		t.Fatalf("exact JSON schema byte limit rejected: %v", err)
+	}
+	limits.MaxBlockBytes--
+	if _, err := projectToolDefinition(jsonTool(simpleSchema), limits); err == nil {
+		t.Fatal("one-over JSON schema byte limit was accepted")
+	}
+}
+
+func TestToolDefinitionCollectionsRejectNilEmptyAndDuplicateEntries(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		block *schema.ContentBlock
+	}{
+		{name: "tool search nil", block: schema.NewContentBlock(&schema.ToolSearchFunctionToolResult{CallID: "search", Name: "search", Result: &schema.ToolSearchResult{Tools: []*schema.ToolInfo{nil}}})},
+		{name: "tool search empty", block: schema.NewContentBlock(&schema.ToolSearchFunctionToolResult{CallID: "search", Name: "search", Result: &schema.ToolSearchResult{Tools: []*schema.ToolInfo{{}}}})},
+		{name: "tool search duplicate", block: schema.NewContentBlock(&schema.ToolSearchFunctionToolResult{CallID: "search", Name: "search", Result: &schema.ToolSearchResult{Tools: []*schema.ToolInfo{{Name: "same"}, {Name: "same"}}}})},
+		{name: "MCP list nil", block: schema.NewContentBlock(&schema.MCPListToolsResult{ServerLabel: "server", Tools: []*schema.MCPListToolsItem{nil}})},
+		{name: "MCP list empty", block: schema.NewContentBlock(&schema.MCPListToolsResult{ServerLabel: "server", Tools: []*schema.MCPListToolsItem{{}}})},
+		{name: "MCP list duplicate", block: schema.NewContentBlock(&schema.MCPListToolsResult{ServerLabel: "server", Tools: []*schema.MCPListToolsItem{{Name: "same"}, {Name: "same"}}})},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			role := schema.AgenticRoleTypeAssistant
+			if tc.block.Type == schema.ContentBlockTypeToolSearchResult {
+				role = schema.AgenticRoleTypeUser
+			}
+			if _, err := ProjectAgenticMessage(&schema.AgenticMessage{Role: role, ContentBlocks: []*schema.ContentBlock{tc.block}}, testContext(AgenticBlockContext{BlockID: "block"})); err == nil {
+				t.Fatal("malformed tool collection was accepted")
+			}
+		})
+	}
 }
 
 func TestAnnotationLimitIsSharedAcrossProviders(t *testing.T) {

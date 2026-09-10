@@ -432,6 +432,9 @@ func projectToolDefinition(v *schema.ToolInfo, limits ProjectionLimits) (PublicT
 		return out, errors.New("tool has both parameter representations")
 	}
 	if len(wire.JSONSchema) != 0 && string(wire.JSONSchema) != "null" {
+		if err := validateToolJSONSchema(wire.JSONSchema, limits); err != nil {
+			return out, err
+		}
 		out.ParamsKind = "json_schema"
 		out.JSONSchema = append(json.RawMessage(nil), wire.JSONSchema...)
 		return out, nil
@@ -453,6 +456,26 @@ func projectToolDefinition(v *schema.ToolInfo, limits ProjectionLimits) (PublicT
 		out.Params[k] = cloned
 	}
 	return out, nil
+}
+
+func validateToolJSONSchema(data json.RawMessage, limits ProjectionLimits) error {
+	if len(data) > limits.MaxBlockBytes {
+		return errors.New("JSON schema byte limit exceeded")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return errors.New("cannot decode JSON schema")
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return errors.New("cannot decode JSON schema")
+	}
+	entries := 0
+	if err := walkJSON(reflect.ValueOf(value), 1, limits, &entries, map[visit]bool{}); err != nil {
+		return fmt.Errorf("JSON schema: %w", err)
+	}
+	return nil
 }
 
 func cloneParameter(v *schema.ParameterInfo, depth int, limits ProjectionLimits, entries *int, stack map[*schema.ParameterInfo]bool) (*PublicParameterInfo, error) {
