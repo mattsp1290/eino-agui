@@ -746,6 +746,16 @@ func TestCommittedPauseResumeOrderingAndTargets(t *testing.T) {
 	if got := golden.FrameTypes(normalizedFrames(t, sink)); !reflect.DeepEqual(got, []string{"CUSTOM", "CUSTOM", "CUSTOM"}) {
 		t.Fatalf("types = %v", got)
 	}
+	freshSink := testsse.NewSink()
+	fresh := NewObserverEmitter(t.Context(), freshSink.Writer(), freshSink.SSEWriter())
+	if !fresh.Paused(pause, pauseReceipt) ||
+		!emitResume(fresh, convert.ResumedV1{PauseID: "pause", Targets: []convert.InterruptTargetV1{targets[1]}, NewTurnID: "turn-2", NewAttemptID: "attempt-2"}) ||
+		!emitResume(fresh, convert.ResumedV1{PauseID: "pause", Targets: remaining, Full: true, NewTurnID: "turn-3", NewAttemptID: "attempt-3", Correlation: correlation}) {
+		t.Fatalf("fresh pause/resume replay failed: %v / %v", fresh.Err(), fresh.EncErr())
+	}
+	if got, want := normalizedFrames(t, freshSink), normalizedFrames(t, sink); !reflect.DeepEqual(got, want) {
+		t.Fatalf("fresh pause/resume replay mismatch\ngot=%#v\nwant=%#v", got, want)
+	}
 }
 
 func TestCommittedLifecycleWrappers(t *testing.T) {

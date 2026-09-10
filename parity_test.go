@@ -60,6 +60,7 @@ func TestParityGoldenFixtures(t *testing.T) {
 				"TestStreamAgenticTurnAllAssistantContentKinds",
 				"TestStreamAgenticTurnDetachesRealObserverOnWriteAndFlushErrors",
 				"TestDrainAgenticEventsCompleteAndStreamingMessages",
+				"TestDrainAgenticEventsClosesUndrainedReaderWhenEventHasError",
 				"TestDrainAgenticEventsStreamsAllUserContentKinds",
 			},
 		},

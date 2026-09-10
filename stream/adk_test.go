@@ -1,13 +1,15 @@
 package stream
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/encoding/sse"
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/schema"
 
@@ -60,17 +62,15 @@ func (s *scriptedAgentEventSource) Wait(context.Context) error {
 	return nil
 }
 
-type signalingFailSink struct {
-	detached chan struct{}
-	calls    atomic.Int32
+type notifyingErrorWriter struct {
+	failed chan struct{}
+	once   sync.Once
 }
 
-func (s *signalingFailSink) Emit(events.Event) error {
-	s.calls.Add(1)
-	return errors.New("observer failed")
+func (w *notifyingErrorWriter) Write([]byte) (int, error) {
+	w.once.Do(func() { close(w.failed) })
+	return 0, errors.New("broken pipe")
 }
-
-func (s *signalingFailSink) Detach(error) { close(s.detached) }
 
 func sourceFromEvents(t *testing.T, events ...*adk.TypedAgentEvent[*schema.AgenticMessage]) AgentEventSource {
 	t.Helper()
@@ -392,27 +392,47 @@ func TestDrainAgenticEventsReaderErrorClosesReaderAndCleansSourceOnce(t *testing
 	}
 }
 
+func TestDrainAgenticEventsClosesUndrainedReaderWhenEventHasError(t *testing.T) {
+	t.Parallel()
+	reader, writer := schema.Pipe[*schema.AgenticMessage](1)
+	event := adk.EventFromAgenticMessage(nil, reader, schema.AgenticRoleTypeAssistant)
+	eventErr := errors.New("event failed before stream drain")
+	event.Err = eventErr
+	source := &scriptedAgentEventSource{events: []*adk.TypedAgentEvent[*schema.AgenticMessage]{event}}
+	result, err := DrainAgenticEvents(t.Context(), source, testEventResolver{})
+	if !errors.Is(err, eventErr) || result == nil || !result.Partial {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if source.aborts.Load() != 1 || source.waits.Load() != 1 {
+		t.Fatalf("aborts=%d waits=%d", source.aborts.Load(), source.waits.Load())
+	}
+	if !writer.Send(testmodel.AgenticTextChunks(0, "late")[0], nil) {
+		t.Fatal("undrained event reader was not closed")
+	}
+}
+
 func TestDrainAgenticEventsObserverFailureDoesNotAbortBlockedSourceAndProjectionReplays(t *testing.T) {
 	t.Parallel()
 	release := make(chan struct{})
 	messageStream := schema.StreamReaderFromArray(testmodel.AgenticTextChunks(0, "complete"))
 	event := adk.EventFromAgenticMessage(nil, messageStream, schema.AgenticRoleTypeAssistant)
 	source := &scriptedAgentEventSource{events: []*adk.TypedAgentEvent[*schema.AgenticMessage]{event}, release: release}
-	sink := &signalingFailSink{detached: make(chan struct{})}
+	transport := &notifyingErrorWriter{failed: make(chan struct{})}
+	observer := emitter.NewObserverSink(emitter.NewObserverEmitter(t.Context(), bufio.NewWriter(transport), sse.NewSSEWriter()))
 	type drainResult struct {
 		result *AgentEventResult
 		err    error
 	}
 	done := make(chan drainResult, 1)
 	go func() {
-		result, err := DrainAgenticEvents(t.Context(), source, testEventResolver{}, WithAgentEventTransientSink(sink))
+		result, err := DrainAgenticEvents(t.Context(), source, testEventResolver{}, WithAgentEventTransientSink(observer))
 		done <- drainResult{result: result, err: err}
 	}()
 
 	select {
-	case <-sink.detached:
+	case <-transport.failed:
 	case <-time.After(time.Second):
-		t.Fatal("observer did not detach")
+		t.Fatal("observer transport did not fail")
 	}
 	if source.aborts.Load() != 0 {
 		t.Fatalf("observer failure aborted execution %d times", source.aborts.Load())
@@ -422,8 +442,8 @@ func TestDrainAgenticEventsObserverFailureDoesNotAbortBlockedSourceAndProjection
 	if drained.err != nil || drained.result == nil || drained.result.Partial || len(drained.result.Projections) != 1 || drained.result.ObserverErr == nil {
 		t.Fatalf("result=%#v err=%v", drained.result, drained.err)
 	}
-	if source.aborts.Load() != 0 || source.waits.Load() != 1 || sink.calls.Load() != 1 {
-		t.Fatalf("aborts=%d waits=%d observer calls=%d", source.aborts.Load(), source.waits.Load(), sink.calls.Load())
+	if source.aborts.Load() != 0 || source.waits.Load() != 1 || observer.Err() == nil {
+		t.Fatalf("aborts=%d waits=%d observer error=%v", source.aborts.Load(), source.waits.Load(), observer.Err())
 	}
 
 	projection := drained.result.Projections[0]

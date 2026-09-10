@@ -253,19 +253,23 @@ func DrainAgenticEvents(ctx context.Context, source AgentEventSource, resolver A
 		}
 		resolution, err := resolver.ResolveAgentEvent(AgentEventCoordinates{AgentName: event.AgentName, RunPath: stringifyRunPath(event.RunPath), EventOrdinal: ordinal})
 		if err != nil {
+			closeUndrainedAgentEventStream(event)
 			return finish(fmt.Errorf("resolve agent event %d: %w", ordinal, err), true)
 		}
 		if err := validateAgenticStreamIdentity(resolution.Identity, config.limits); err != nil {
+			closeUndrainedAgentEventStream(event)
 			return finish(fmt.Errorf("resolve agent event %d identity: %w", ordinal, err), true)
 		}
 		if resolution.Subagent != nil {
 			candidate, err := projectSubagentLifecycle(event.AgentName, resolution)
 			if err != nil {
+				closeUndrainedAgentEventStream(event)
 				return finish(err, true)
 			}
 			result.Subagents = append(result.Subagents, candidate)
 		}
 		if event.Err != nil {
+			closeUndrainedAgentEventStream(event)
 			var cancelled *adk.CancelError
 			if errors.As(event.Err, &cancelled) {
 				result.Cancellations = append(result.Cancellations, CancellationCandidate{Identity: resolution.Identity, Cancellation: projectCancel(cancelled)})
@@ -275,6 +279,7 @@ func DrainAgenticEvents(ctx context.Context, source AgentEventSource, resolver A
 		}
 		if event.Output != nil {
 			if event.Output.CustomizedOutput != nil {
+				closeUndrainedAgentEventStream(event)
 				return finish(errors.New("customized agent output has no public adapter"), true)
 			}
 			if event.Output.MessageOutput == nil {
@@ -323,6 +328,13 @@ func DrainAgenticEvents(ctx context.Context, source AgentEventSource, resolver A
 			}
 		}
 	}
+}
+
+func closeUndrainedAgentEventStream(event *adk.TypedAgentEvent[*schema.AgenticMessage]) {
+	if event == nil || event.Output == nil || event.Output.MessageOutput == nil || event.Output.MessageOutput.MessageStream == nil {
+		return
+	}
+	event.Output.MessageOutput.MessageStream.Close()
 }
 
 func appendConfiguredCancellation(result *AgentEventResult, candidate *CancellationCandidate, err error) {
