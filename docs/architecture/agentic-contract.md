@@ -26,6 +26,13 @@ func stream.DrainAgenticEvents(context.Context, stream.AgentEventSource,
     stream.AgentEventIdentityResolver, ...stream.AgentEventOption) (*stream.AgentEventResult, error)
 func stream.WithAgentEventCancellationCandidate(stream.AgenticStreamIdentity,
     convert.CancelledV1) stream.AgentEventOption
+
+// package convert
+type ToolExecutionOwner string
+const (
+    ToolExecutionOwnerProvider ToolExecutionOwner = "provider"
+    ToolExecutionOwnerProviderMCP ToolExecutionOwner = "provider_mcp"
+)
 ```
 
 Conversion starts with:
@@ -137,10 +144,10 @@ The closed `eino.agentic.v1` projection maps all 20 Eino kinds:
 | `assistant_gen_video` | closed generated-video block |
 | `function_tool_call` | native tool-call events plus durable identity |
 | `function_tool_result` | native only for one text part; structured custom otherwise |
-| `server_tool_call` | provider-owned closed arguments and provider-server ID |
-| `server_tool_result` | provider-owned closed result and provider-server ID |
-| `mcp_tool_call` | provider-MCP call record |
-| `mcp_tool_result` | provider-MCP result and typed error |
+| `server_tool_call` | provider-owned closed arguments, provider-server ID, and `executionOwner: provider` |
+| `server_tool_result` | provider-owned closed result, provider-server ID, and `executionOwner: provider` |
+| `mcp_tool_call` | provider-MCP call record with `executionOwner: provider_mcp` |
+| `mcp_tool_result` | provider-MCP result and typed error with `executionOwner: provider_mcp` |
 | `mcp_list_tools_result` | ordered closed MCP tool definitions/error |
 | `mcp_tool_approval_request` | native MCP approval request, not an ADK interrupt |
 | `mcp_tool_approval_response` | response requiring the expected native request ID |

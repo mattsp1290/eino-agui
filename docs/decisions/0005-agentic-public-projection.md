@@ -46,6 +46,11 @@ carry a host-owned durable pause ID. A resume requires a preceding pause on the
 same emitter, exact full or ordered partial targets, and the original approval
 correlation when its target is resumed.
 
+Provider-server call/result payloads carry `executionOwner: provider`; MCP
+call/result payloads carry `executionOwner: provider_mcp`. These closed markers
+make both provider-owned families explicitly distinct from host-local function
+tools without relying on names or call-ID conventions.
+
 Projection uses explicit positive limits before cloning or encoding. Arbitrary
 server-tool values must be acyclic JSON-compatible data. Provider annotations
 are allowlisted. Raw `Extra`, arbitrary extension values, reasoning signatures,

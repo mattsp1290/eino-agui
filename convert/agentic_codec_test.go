@@ -145,6 +145,87 @@ func TestProjectFunctionResultAllNestedKinds(t *testing.T) {
 	}
 }
 
+func TestProviderToolExecutionOwnersAreExplicitAndStrict(t *testing.T) {
+	t.Parallel()
+	code := int64(7)
+	tests := []struct {
+		name    string
+		block   *schema.ContentBlock
+		context AgenticBlockContext
+		owner   func(PublicContentBlock) ToolExecutionOwner
+	}{
+		{
+			name: "server call", block: schema.NewContentBlock(&schema.ServerToolCall{CallID: "server-call", Name: "web", Arguments: map[string]any{"q": "go"}}),
+			context: AgenticBlockContext{BlockID: "block", ProviderServerID: "provider-server"}, owner: func(block PublicContentBlock) ToolExecutionOwner { return block.ServerToolCall.ExecutionOwner },
+		},
+		{
+			name: "server result", block: schema.NewContentBlock(&schema.ServerToolResult{CallID: "server-call", Name: "web", Content: []any{"result"}}),
+			context: AgenticBlockContext{BlockID: "block", ProviderServerID: "provider-server"}, owner: func(block PublicContentBlock) ToolExecutionOwner { return block.ServerToolResult.ExecutionOwner },
+		},
+		{
+			name: "MCP call", block: schema.NewContentBlock(&schema.MCPToolCall{ServerLabel: "server", CallID: "mcp-call", Name: "lookup", Arguments: `{}`}),
+			context: AgenticBlockContext{BlockID: "block"}, owner: func(block PublicContentBlock) ToolExecutionOwner { return block.MCPToolCall.ExecutionOwner },
+		},
+		{
+			name: "MCP result", block: schema.NewContentBlock(&schema.MCPToolResult{ServerLabel: "server", CallID: "mcp-call", Name: "lookup", Content: `{}`, Error: &schema.MCPToolCallError{Code: &code, Message: "failed"}}),
+			context: AgenticBlockContext{BlockID: "block"}, owner: func(block PublicContentBlock) ToolExecutionOwner { return block.MCPToolResult.ExecutionOwner },
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			projection, err := ToAgenticProjection(&schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{tc.block}}, testContext(tc.context))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := ToolExecutionOwnerProvider
+			if strings.HasPrefix(tc.name, "MCP") {
+				want = ToolExecutionOwnerProviderMCP
+			}
+			if got := tc.owner(projection.Public.ContentBlocks[0]); got != want {
+				t.Fatalf("execution owner = %q, want %q", got, want)
+			}
+			encoded, err := json.Marshal(projection.Blocks[0].Supplement)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(encoded, []byte(`"executionOwner":"`+string(want)+`"`)) {
+				t.Fatalf("wire payload lacks execution owner: %s", encoded)
+			}
+
+			block := projection.Blocks[0].Supplement.ContentBlock
+			switch {
+			case block.ServerToolCall != nil:
+				block.ServerToolCall.ExecutionOwner = ToolExecutionOwnerProviderMCP
+			case block.ServerToolResult != nil:
+				block.ServerToolResult.ExecutionOwner = ToolExecutionOwnerProviderMCP
+			case block.MCPToolCall != nil:
+				block.MCPToolCall.ExecutionOwner = ToolExecutionOwnerProvider
+			case block.MCPToolResult != nil:
+				block.MCPToolResult.ExecutionOwner = ToolExecutionOwnerProvider
+			}
+			projection.Blocks[0].Supplement.Digest = ""
+			if _, err := DecodeAgenticEnvelope(&projection.Blocks[0].Supplement); err == nil {
+				t.Fatal("wrong execution owner was accepted")
+			}
+		})
+	}
+
+	local, err := ToAgenticProjection(
+		&schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{schema.NewContentBlock(&schema.FunctionToolCall{CallID: "local-call", Name: "local", Arguments: `{}`})}},
+		testContext(AgenticBlockContext{BlockID: "local-block"}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(local.Blocks[0].Supplement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte("executionOwner")) {
+		t.Fatalf("host-local function call acquired provider ownership: %s", encoded)
+	}
+}
+
 func TestProjectRejectsMalformedUnionBeforeReturningProjection(t *testing.T) {
 	t.Parallel()
 	bad := &schema.ContentBlock{Type: schema.ContentBlockTypeReasoning, Reasoning: &schema.Reasoning{Text: "x"}, AssistantGenText: &schema.AssistantGenText{Text: "y"}}

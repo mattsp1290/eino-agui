@@ -128,35 +128,47 @@ type PublicFunctionToolResult struct {
 	Name    string                     `json:"name"`
 	Content []PublicFunctionResultPart `json:"content"`
 }
+
+type ToolExecutionOwner string
+
+const (
+	ToolExecutionOwnerProvider    ToolExecutionOwner = "provider"
+	ToolExecutionOwnerProviderMCP ToolExecutionOwner = "provider_mcp"
+)
+
 type PublicServerToolCall struct {
-	ProviderServerID string `json:"providerServerId"`
-	CallID           string `json:"callId"`
-	Name             string `json:"name"`
-	Arguments        any    `json:"arguments,omitempty"`
+	ProviderServerID string             `json:"providerServerId"`
+	CallID           string             `json:"callId"`
+	Name             string             `json:"name"`
+	Arguments        any                `json:"arguments,omitempty"`
+	ExecutionOwner   ToolExecutionOwner `json:"executionOwner"`
 }
 type PublicServerToolResult struct {
-	ProviderServerID string `json:"providerServerId"`
-	CallID           string `json:"callId"`
-	Name             string `json:"name"`
-	Content          any    `json:"content,omitempty"`
+	ProviderServerID string             `json:"providerServerId"`
+	CallID           string             `json:"callId"`
+	Name             string             `json:"name"`
+	Content          any                `json:"content,omitempty"`
+	ExecutionOwner   ToolExecutionOwner `json:"executionOwner"`
 }
 type PublicMCPToolCall struct {
-	ServerLabel       string `json:"serverLabel"`
-	ApprovalRequestID string `json:"approvalRequestId,omitempty"`
-	CallID            string `json:"callId"`
-	Name              string `json:"name"`
-	Arguments         string `json:"arguments"`
+	ServerLabel       string             `json:"serverLabel"`
+	ApprovalRequestID string             `json:"approvalRequestId,omitempty"`
+	CallID            string             `json:"callId"`
+	Name              string             `json:"name"`
+	Arguments         string             `json:"arguments"`
+	ExecutionOwner    ToolExecutionOwner `json:"executionOwner"`
 }
 type PublicMCPError struct {
 	Code    *int64 `json:"code,omitempty"`
 	Message string `json:"message,omitempty"`
 }
 type PublicMCPToolResult struct {
-	ServerLabel string          `json:"serverLabel"`
-	CallID      string          `json:"callId"`
-	Name        string          `json:"name"`
-	Content     string          `json:"content"`
-	Error       *PublicMCPError `json:"error,omitempty"`
+	ServerLabel    string             `json:"serverLabel"`
+	CallID         string             `json:"callId"`
+	Name           string             `json:"name"`
+	Content        string             `json:"content"`
+	Error          *PublicMCPError    `json:"error,omitempty"`
+	ExecutionOwner ToolExecutionOwner `json:"executionOwner"`
 }
 type PublicMCPListToolsItem struct {
 	Name        string          `json:"name"`

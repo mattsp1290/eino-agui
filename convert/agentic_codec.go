@@ -202,7 +202,10 @@ func projectBlock(block *schema.ContentBlock, bc AgenticBlockContext, base Agent
 		args, err = clonePublicJSON(v.Arguments, limits)
 		if err == nil {
 			out.Identity.CallID = v.CallID
-			out.ServerToolCall = &PublicServerToolCall{bc.ProviderServerID, v.CallID, v.Name, args}
+			out.ServerToolCall = &PublicServerToolCall{
+				ProviderServerID: bc.ProviderServerID, CallID: v.CallID, Name: v.Name,
+				Arguments: args, ExecutionOwner: ToolExecutionOwnerProvider,
+			}
 		}
 	case schema.ContentBlockTypeServerToolResult:
 		if bc.ProviderServerID == "" {
@@ -218,7 +221,10 @@ func projectBlock(block *schema.ContentBlock, bc AgenticBlockContext, base Agent
 		content, err = clonePublicJSON(v.Content, limits)
 		if err == nil {
 			out.Identity.CallID = v.CallID
-			out.ServerToolResult = &PublicServerToolResult{bc.ProviderServerID, v.CallID, v.Name, content}
+			out.ServerToolResult = &PublicServerToolResult{
+				ProviderServerID: bc.ProviderServerID, CallID: v.CallID, Name: v.Name,
+				Content: content, ExecutionOwner: ToolExecutionOwnerProvider,
+			}
 		}
 	case schema.ContentBlockTypeMCPToolCall:
 		v := block.MCPToolCall
@@ -227,7 +233,11 @@ func projectBlock(block *schema.ContentBlock, bc AgenticBlockContext, base Agent
 			break
 		}
 		out.Identity.CallID = v.CallID
-		out.MCPToolCall = &PublicMCPToolCall{v.ServerLabel, v.ApprovalRequestID, v.CallID, v.Name, v.Arguments}
+		out.MCPToolCall = &PublicMCPToolCall{
+			ServerLabel: v.ServerLabel, ApprovalRequestID: v.ApprovalRequestID,
+			CallID: v.CallID, Name: v.Name, Arguments: v.Arguments,
+			ExecutionOwner: ToolExecutionOwnerProviderMCP,
+		}
 	case schema.ContentBlockTypeMCPToolResult:
 		v := block.MCPToolResult
 		if v.ServerLabel == "" || v.CallID == "" || v.Name == "" {
@@ -235,7 +245,10 @@ func projectBlock(block *schema.ContentBlock, bc AgenticBlockContext, base Agent
 			break
 		}
 		out.Identity.CallID = v.CallID
-		out.MCPToolResult = &PublicMCPToolResult{ServerLabel: v.ServerLabel, CallID: v.CallID, Name: v.Name, Content: v.Content}
+		out.MCPToolResult = &PublicMCPToolResult{
+			ServerLabel: v.ServerLabel, CallID: v.CallID, Name: v.Name, Content: v.Content,
+			ExecutionOwner: ToolExecutionOwnerProviderMCP,
+		}
 		if v.Error != nil {
 			code := v.Error.Code
 			if code != nil {
@@ -1119,13 +1132,13 @@ func validatePublicContentBlock(block *PublicContentBlock) error {
 	case schema.ContentBlockTypeFunctionToolResult:
 		valid = validatePublicFunctionResult(block.FunctionToolResult) == nil
 	case schema.ContentBlockTypeServerToolCall:
-		valid = block.ServerToolCall != nil && block.ServerToolCall.ProviderServerID != "" && block.ServerToolCall.CallID != "" && block.ServerToolCall.Name != ""
+		valid = block.ServerToolCall != nil && block.ServerToolCall.ProviderServerID != "" && block.ServerToolCall.CallID != "" && block.ServerToolCall.Name != "" && block.ServerToolCall.ExecutionOwner == ToolExecutionOwnerProvider
 	case schema.ContentBlockTypeServerToolResult:
-		valid = block.ServerToolResult != nil && block.ServerToolResult.ProviderServerID != "" && block.ServerToolResult.CallID != "" && block.ServerToolResult.Name != ""
+		valid = block.ServerToolResult != nil && block.ServerToolResult.ProviderServerID != "" && block.ServerToolResult.CallID != "" && block.ServerToolResult.Name != "" && block.ServerToolResult.ExecutionOwner == ToolExecutionOwnerProvider
 	case schema.ContentBlockTypeMCPToolCall:
-		valid = block.MCPToolCall != nil && block.MCPToolCall.ServerLabel != "" && block.MCPToolCall.CallID != "" && block.MCPToolCall.Name != ""
+		valid = block.MCPToolCall != nil && block.MCPToolCall.ServerLabel != "" && block.MCPToolCall.CallID != "" && block.MCPToolCall.Name != "" && block.MCPToolCall.ExecutionOwner == ToolExecutionOwnerProviderMCP
 	case schema.ContentBlockTypeMCPToolResult:
-		valid = block.MCPToolResult != nil && block.MCPToolResult.ServerLabel != "" && block.MCPToolResult.CallID != "" && block.MCPToolResult.Name != ""
+		valid = block.MCPToolResult != nil && block.MCPToolResult.ServerLabel != "" && block.MCPToolResult.CallID != "" && block.MCPToolResult.Name != "" && block.MCPToolResult.ExecutionOwner == ToolExecutionOwnerProviderMCP
 	case schema.ContentBlockTypeMCPListToolsResult:
 		valid = block.MCPListToolsResult != nil && block.MCPListToolsResult.ServerLabel != ""
 	case schema.ContentBlockTypeMCPToolApprovalRequest:
