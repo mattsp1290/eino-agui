@@ -473,6 +473,37 @@ func TestStreamAgenticTurnCopiesInputAndOptionSlices(t *testing.T) {
 	}
 }
 
+func TestStreamAgenticTurnDoesNotMutateInputOrOptionsOnFailure(t *testing.T) {
+	t.Parallel()
+	input := []*schema.AgenticMessage{{Role: schema.AgenticRoleTypeUser, ContentBlocks: []*schema.ContentBlock{schema.NewContentBlock(&schema.UserInputText{Text: "unchanged"})}}}
+	before, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := []model.Option{model.WithTemperature(0.25)}
+	chunks := testmodel.AgenticTextChunks(0, "safe")
+	chunks = append(chunks, &schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{{Type: schema.ContentBlockTypeReasoning, Reasoning: &schema.Reasoning{Text: "x"}, AssistantGenText: &schema.AssistantGenText{Text: "bad"}, StreamingMeta: &schema.StreamingMeta{Index: 1}}}})
+	result, err := StreamAgenticTurn(
+		t.Context(), sliceMutatingAgenticModel{chunks: chunks}, input, agenticIDs(),
+		testBlockResolver{0: {BlockID: "text"}, 1: {BlockID: "bad"}},
+		WithAgenticModelOptions(options...),
+	)
+	if err == nil || result == nil || !result.Partial {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	after, marshalErr := json.Marshal(input)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("input mutated on failure:\nbefore %s\nafter  %s", before, after)
+	}
+	gotOptions := model.GetCommonOptions(nil, options...)
+	if gotOptions.Temperature == nil || *gotOptions.Temperature != 0.25 {
+		t.Fatalf("option slice mutated on failure: %#v", gotOptions)
+	}
+}
+
 func TestStreamAgenticTurnRejectsNilChunk(t *testing.T) {
 	t.Parallel()
 	result, err := StreamAgenticTurn(t.Context(), testmodel.NewAgenticReplayModel([]*schema.AgenticMessage{nil}), nil, agenticIDs(), testBlockResolver{})

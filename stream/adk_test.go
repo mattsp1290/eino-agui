@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -468,5 +469,29 @@ func TestDrainAgenticEventsRejectsEmptyTransferDestination(t *testing.T) {
 	}
 	if source.aborts.Load() != 1 || source.waits.Load() != 1 {
 		t.Fatalf("aborts=%d waits=%d", source.aborts.Load(), source.waits.Load())
+	}
+}
+
+func TestDrainAgenticEventsReturnsHostControlObservationsInOrder(t *testing.T) {
+	t.Parallel()
+	events := []*adk.TypedAgentEvent[*schema.AgenticMessage]{
+		{Action: adk.NewTransferToAgentAction("research")},
+		{Action: adk.NewExitAction()},
+		{Action: adk.NewBreakLoopAction("root")},
+	}
+	result, err := DrainAgenticEvents(t.Context(), sourceFromEvents(t, events...), testEventResolver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []AgentControlObservation{
+		{Kind: AgentControlTransfer, Destination: "research"},
+		{Kind: AgentControlExit},
+		{Kind: AgentControlBreakLoop},
+	}
+	if result.Partial || !reflect.DeepEqual(result.Controls, want) {
+		t.Fatalf("result=%#v controls=%#v, want %#v", result, result.Controls, want)
+	}
+	if len(result.Cancellations) != 0 || len(result.Interrupts) != 0 || len(result.Subagents) != 0 {
+		t.Fatalf("control actions produced lifecycle candidates: %#v", result)
 	}
 }
