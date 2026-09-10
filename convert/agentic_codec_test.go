@@ -227,6 +227,82 @@ func TestProviderToolExecutionOwnersAreExplicitAndStrict(t *testing.T) {
 	}
 }
 
+func TestDurableCallAndApprovalIdentitiesArePhaseUnique(t *testing.T) {
+	t.Parallel()
+	project := func(role schema.AgenticRoleType, blocks []*schema.ContentBlock, contexts []AgenticBlockContext) (*PublicAgenticMessage, error) {
+		return ProjectAgenticMessage(&schema.AgenticMessage{Role: role, ContentBlocks: blocks}, testContext(contexts...))
+	}
+	duplicateCases := []struct {
+		name     string
+		role     schema.AgenticRoleType
+		blocks   []*schema.ContentBlock
+		contexts []AgenticBlockContext
+	}{
+		{
+			name: "function call proposals", role: schema.AgenticRoleTypeAssistant,
+			blocks: []*schema.ContentBlock{
+				schema.NewContentBlock(&schema.FunctionToolCall{CallID: "call", Name: "first", Arguments: `{}`}),
+				schema.NewContentBlock(&schema.FunctionToolCall{CallID: "call", Name: "second", Arguments: `{}`}),
+			}, contexts: []AgenticBlockContext{{BlockID: "one"}, {BlockID: "two"}},
+		},
+		{
+			name: "server call results", role: schema.AgenticRoleTypeAssistant,
+			blocks: []*schema.ContentBlock{
+				schema.NewContentBlock(&schema.ServerToolResult{CallID: "call", Name: "first", Content: "one"}),
+				schema.NewContentBlock(&schema.ServerToolResult{CallID: "call", Name: "second", Content: "two"}),
+			}, contexts: []AgenticBlockContext{{BlockID: "one", ProviderServerID: "provider"}, {BlockID: "two", ProviderServerID: "provider"}},
+		},
+		{
+			name: "approval requests", role: schema.AgenticRoleTypeAssistant,
+			blocks: []*schema.ContentBlock{
+				schema.NewContentBlock(&schema.MCPToolApprovalRequest{ID: "approval", ServerLabel: "server", Name: "first", Arguments: `{}`}),
+				schema.NewContentBlock(&schema.MCPToolApprovalRequest{ID: "approval", ServerLabel: "server", Name: "second", Arguments: `{}`}),
+			}, contexts: []AgenticBlockContext{{BlockID: "one"}, {BlockID: "two"}},
+		},
+		{
+			name: "approval responses", role: schema.AgenticRoleTypeUser,
+			blocks: []*schema.ContentBlock{
+				schema.NewContentBlock(&schema.MCPToolApprovalResponse{ApprovalRequestID: "approval", Approve: true}),
+				schema.NewContentBlock(&schema.MCPToolApprovalResponse{ApprovalRequestID: "approval", Approve: false}),
+			}, contexts: []AgenticBlockContext{{BlockID: "one", ExpectedApprovalRequestID: "approval"}, {BlockID: "two", ExpectedApprovalRequestID: "approval"}},
+		},
+	}
+	for _, tc := range duplicateCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := project(tc.role, tc.blocks, tc.contexts); err == nil || !strings.Contains(err.Error(), "duplicate") {
+				t.Fatalf("error=%v, want duplicate identity rejection", err)
+			}
+		})
+	}
+
+	pairedBlocks := []*schema.ContentBlock{
+		schema.NewContentBlock(&schema.ServerToolCall{CallID: "server-call", Name: "search", Arguments: map[string]any{"q": "go"}}),
+		schema.NewContentBlock(&schema.ServerToolResult{CallID: "server-call", Name: "search", Content: "result"}),
+		schema.NewContentBlock(&schema.MCPToolCall{ServerLabel: "server", CallID: "mcp-call", Name: "lookup", Arguments: `{}`}),
+		schema.NewContentBlock(&schema.MCPToolResult{ServerLabel: "server", CallID: "mcp-call", Name: "lookup", Content: `{}`}),
+	}
+	pairedContexts := []AgenticBlockContext{
+		{BlockID: "server-call", ProviderServerID: "provider"}, {BlockID: "server-result", ProviderServerID: "provider"},
+		{BlockID: "mcp-call"}, {BlockID: "mcp-result"},
+	}
+	if _, err := project(schema.AgenticRoleTypeAssistant, pairedBlocks, pairedContexts); err != nil {
+		t.Fatalf("matching call/result correlations were rejected: %v", err)
+	}
+
+	projection, err := project(schema.AgenticRoleTypeAssistant, []*schema.ContentBlock{
+		schema.NewContentBlock(&schema.FunctionToolCall{CallID: "first", Name: "lookup", Arguments: `{}`}),
+		schema.NewContentBlock(&schema.FunctionToolCall{CallID: "second", Name: "search", Arguments: `{}`}),
+	}, []AgenticBlockContext{{BlockID: "first"}, {BlockID: "second"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection.ContentBlocks[1].FunctionToolCall.CallID = "first"
+	projection.ContentBlocks[1].Identity.CallID = "first"
+	if _, err := ProjectionDigestV1(projection); err == nil {
+		t.Fatal("caller-mutated duplicate call identity was accepted for digest")
+	}
+}
+
 func TestProjectRejectsMalformedUnionBeforeReturningProjection(t *testing.T) {
 	t.Parallel()
 	functionResult := func(part *schema.FunctionToolResultContentBlock) *schema.ContentBlock {

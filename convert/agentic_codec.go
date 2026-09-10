@@ -94,6 +94,7 @@ func ProjectAgenticMessage(msg *schema.AgenticMessage, ctx AgenticProjectionCont
 	out := &PublicAgenticMessage{Version: AgenticSchemaVersion, Identity: cloneIdentity(ctx.Identity), Role: msg.Role}
 	out.ContentBlocks = make([]PublicContentBlock, len(msg.ContentBlocks))
 	seenBlocks := make(map[string]struct{}, len(msg.ContentBlocks))
+	seenOwnedIDs := make(map[string]struct{}, len(msg.ContentBlocks))
 	for i, block := range msg.ContentBlocks {
 		bc := ctx.Blocks[i]
 		if bc.BlockID == "" {
@@ -106,6 +107,9 @@ func ProjectAgenticMessage(msg *schema.AgenticMessage, ctx AgenticProjectionCont
 		projected, err := projectBlock(block, bc, ctx.Identity, msg.Role, ctx.Limits, i)
 		if err != nil {
 			return nil, err
+		}
+		if err := validateOwnedIDUnique(&projected, seenOwnedIDs); err != nil {
+			return nil, projectErr(i, "identity", err.Error())
 		}
 		encoded, err := json.Marshal(projected)
 		if err != nil || len(encoded) > ctx.Limits.MaxBlockBytes {
@@ -1279,9 +1283,13 @@ func validatePublicAgenticMessage(message *PublicAgenticMessage) error {
 		return errors.New("agentic projection block limit exceeded")
 	}
 	seenBlocks := make(map[string]struct{}, len(message.ContentBlocks))
+	seenOwnedIDs := make(map[string]struct{}, len(message.ContentBlocks))
 	for i := range message.ContentBlocks {
 		block := &message.ContentBlocks[i]
 		if err := validatePublicContentBlock(block); err != nil {
+			return fmt.Errorf("agentic projection block %d: %w", i, err)
+		}
+		if err := validateOwnedIDUnique(block, seenOwnedIDs); err != nil {
 			return fmt.Errorf("agentic projection block %d: %w", i, err)
 		}
 		if !roleAllowsBlock(message.Role, block.Type) {
@@ -1313,6 +1321,37 @@ func validatePublicAgenticMessage(message *PublicAgenticMessage) error {
 		return errors.New("agentic projection encoded message limit exceeded")
 	}
 	return nil
+}
+
+func validateOwnedIDUnique(block *PublicContentBlock, seen map[string]struct{}) error {
+	domain, id := publicBlockOwnedID(block)
+	if id == "" {
+		return nil
+	}
+	key := domain + "\x00" + id
+	if _, duplicate := seen[key]; duplicate {
+		return fmt.Errorf("duplicate %s identity", domain)
+	}
+	seen[key] = struct{}{}
+	return nil
+}
+
+func publicBlockOwnedID(block *PublicContentBlock) (string, string) {
+	switch block.Type {
+	case schema.ContentBlockTypeFunctionToolCall, schema.ContentBlockTypeServerToolCall, schema.ContentBlockTypeMCPToolCall:
+		return "call proposal", publicBlockCallID(block)
+	case schema.ContentBlockTypeToolSearchResult, schema.ContentBlockTypeFunctionToolResult, schema.ContentBlockTypeServerToolResult, schema.ContentBlockTypeMCPToolResult:
+		return "call result", publicBlockCallID(block)
+	case schema.ContentBlockTypeMCPToolApprovalRequest:
+		if block.MCPApprovalRequest != nil {
+			return "approval request", block.MCPApprovalRequest.ID
+		}
+	case schema.ContentBlockTypeMCPToolApprovalResponse:
+		if block.MCPApprovalResponse != nil {
+			return "approval response", block.MCPApprovalResponse.ApprovalRequestID
+		}
+	}
+	return "", ""
 }
 
 func validatePublicGroundingTargets(grounding *PublicGeminiGrounding, blocks []PublicContentBlock) error {
