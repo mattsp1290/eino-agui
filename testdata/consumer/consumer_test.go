@@ -6,7 +6,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/encoding/sse"
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/model"
@@ -38,23 +37,17 @@ func (r eventResolver) ResolveAgentEvent(bridge.AgentEventCoordinates) (bridge.A
 	return bridge.AgentEventResolution{Identity: r.ids, Blocks: blockResolver{}}, nil
 }
 
-type sink struct{ events []events.Event }
-
-func (s *sink) Emit(event events.Event) error { s.events = append(s.events, event); return nil }
-func (*sink) Detach(error)                    {}
-
 func TestDownloadedAgenticBridge(t *testing.T) {
 	ids := bridge.AgenticStreamIdentity{SessionID: "session", RunID: "run", TurnID: "turn", MessageID: "message", AttemptID: "attempt", AgentPath: []convert.AgentPathSegment{{Name: "root", RunID: "run"}}}
 	chunks := []*schema.AgenticMessage{{Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{schema.NewContentBlockChunk(&schema.AssistantGenText{Text: "hello"}, &schema.StreamingMeta{Index: 0})}}}
-	observer := &sink{}
-	result, err := bridge.StreamAgenticTurn(t.Context(), agenticModel{chunks}, nil, ids, blockResolver{}, bridge.WithTransientSink(observer))
-	if err != nil || result.PublicProjection == nil || len(observer.events) != 1 {
-		t.Fatalf("stream result=%#v events=%d err=%v", result, len(observer.events), err)
-	}
-
 	var output bytes.Buffer
 	writer := bufio.NewWriter(&output)
 	emit := emitter.NewObserverEmitter(t.Context(), writer, sse.NewSSEWriter())
+	observer := emitter.NewObserverSink(emit)
+	result, err := bridge.StreamAgenticTurn(t.Context(), agenticModel{chunks}, nil, ids, blockResolver{}, bridge.WithTransientSink(observer))
+	if err != nil || result.PublicProjection == nil || len(result.DeliveredTransient) != 1 {
+		t.Fatalf("stream result=%#v err=%v", result, err)
+	}
 	receipt := convert.CommitReceiptV1{Revision: "revision", Domain: "projection", Identity: result.PublicProjection.Public.Identity, Digest: result.PublicProjection.Digest}
 	if !emit.EmitCommittedProjection(result.PublicProjection, receipt, emitter.DeliveryModeLiveContinuation) {
 		t.Fatalf("emit errors: %v / %v", emit.Err(), emit.EncErr())

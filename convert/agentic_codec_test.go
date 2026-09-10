@@ -2,8 +2,10 @@ package convert
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -221,8 +223,8 @@ func TestAttemptReplacementRequiresCauseAndSemantics(t *testing.T) {
 	t.Parallel()
 	id := testIdentity()
 	for _, replacement := range []AttemptReplacedV1{
-		{OldAttemptID: "old", NewAttemptID: "new", Semantics: "replace"},
-		{OldAttemptID: "old", NewAttemptID: "new", Cause: "retry"},
+		{OldAttemptID: testIdentity().AttemptID, NewAttemptID: "new", Semantics: "replace"},
+		{OldAttemptID: testIdentity().AttemptID, NewAttemptID: "new", Cause: "retry"},
 	} {
 		envelope := &AgenticEnvelopeV1{Version: AgenticSchemaVersion, Kind: EnvelopeAttemptReplaced, Identity: id, AttemptReplaced: &replacement}
 		if _, err := LifecycleDigestV1(envelope); err == nil {
@@ -246,6 +248,8 @@ func TestServerJSONRejectsCyclesAndNonFiniteNumbers(t *testing.T) {
 
 func TestToolDefinitionPreservesParameterRepresentation(t *testing.T) {
 	t.Parallel()
+	privateCycle := map[string]any{}
+	privateCycle["PRIVATE_TOOL_EXTRA"] = privateCycle
 	cases := []struct {
 		name string
 		tool *schema.ToolInfo
@@ -253,12 +257,12 @@ func TestToolDefinitionPreservesParameterRepresentation(t *testing.T) {
 	}{
 		{"none", &schema.ToolInfo{Name: "none"}, "none"},
 		{"present empty params", &schema.ToolInfo{Name: "params", ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{})}, "params"},
-		{"structured params", &schema.ToolInfo{Name: "structured", ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{"query": {Type: schema.String, Required: true}})}, "params"},
+		{"structured params", &schema.ToolInfo{Name: "structured", Extra: privateCycle, ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{"query": {Type: schema.String, Required: true}})}, "params"},
 		{"json schema", &schema.ToolInfo{Name: "json", ParamsOneOf: schema.NewParamsOneOfByJSONSchema(&jsonschema.Schema{Type: "object"})}, "json_schema"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			projected, err := projectToolDefinition(tc.tool)
+			projected, err := projectToolDefinition(tc.tool, DefaultProjectionLimits())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -267,6 +271,126 @@ func TestToolDefinitionPreservesParameterRepresentation(t *testing.T) {
 			}
 			if tc.name == "present empty params" && projected.Params == nil {
 				t.Fatal("present empty params became nil")
+			}
+			encoded, err := json.Marshal(projected)
+			if err != nil || bytes.Contains(encoded, []byte("PRIVATE_TOOL_EXTRA")) {
+				t.Fatalf("private tool extra leaked or affected encoding: %s / %v", encoded, err)
+			}
+		})
+	}
+}
+
+func TestToolDefinitionAppliesLimitsBeforeClone(t *testing.T) {
+	t.Parallel()
+	chain := func(depth int) *schema.ParameterInfo {
+		root := &schema.ParameterInfo{Type: schema.Object}
+		current := root
+		for i := 1; i < depth; i++ {
+			current.ElemInfo = &schema.ParameterInfo{Type: schema.Object}
+			current = current.ElemInfo
+		}
+		return root
+	}
+	tool := func(parameter *schema.ParameterInfo) *schema.ToolInfo {
+		return &schema.ToolInfo{Name: "bounded", ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{"value": parameter})}
+	}
+
+	limits := DefaultProjectionLimits()
+	limits.MaxJSONDepth = 2
+	if _, err := projectToolDefinition(tool(chain(2)), limits); err != nil {
+		t.Fatalf("exact depth rejected: %v", err)
+	}
+	if _, err := projectToolDefinition(tool(chain(3)), limits); err == nil {
+		t.Fatal("one-over depth was accepted")
+	}
+
+	limits = DefaultProjectionLimits()
+	limits.MaxJSONEntries = 3
+	parameter := &schema.ParameterInfo{Type: schema.String, Enum: []string{"one", "two"}}
+	if _, err := projectToolDefinition(tool(parameter), limits); err != nil {
+		t.Fatalf("exact entry count rejected: %v", err)
+	}
+	parameter.Enum = append(parameter.Enum, "three")
+	if _, err := projectToolDefinition(tool(parameter), limits); err == nil {
+		t.Fatal("one-over entry count was accepted")
+	}
+}
+
+func TestAnnotationLimitIsSharedAcrossProviders(t *testing.T) {
+	t.Parallel()
+	limits := DefaultProjectionLimits()
+	limits.MaxAnnotations = 1
+	message := &schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{schema.NewContentBlock(&schema.AssistantGenText{
+		Text: "source",
+		OpenAIExtension: &openai.AssistantGenTextExtension{Annotations: []*openai.TextAnnotation{{
+			Type:         openai.TextAnnotationTypeFileCitation,
+			FileCitation: &openai.TextAnnotationFileCitation{FileID: "file", Index: 0},
+		}}},
+		ClaudeExtension: &claude.AssistantGenTextExtension{Citations: []*claude.TextCitation{{
+			Type:                    claude.TextCitationTypeWebSearchResultLocation,
+			WebSearchResultLocation: &claude.CitationWebSearchResultLocation{Title: "source", URL: "https://example.test"},
+		}}},
+	})}}
+	ctx := testContext(AgenticBlockContext{BlockID: "text"})
+	ctx.Limits = limits
+	if _, err := ProjectAgenticMessage(message, ctx); err == nil {
+		t.Fatal("combined one-over annotation count was accepted")
+	}
+}
+
+func TestGeminiGroundingTargetsExactAssistantTextBlock(t *testing.T) {
+	t.Parallel()
+	message := &schema.AgenticMessage{
+		Role: schema.AgenticRoleTypeAssistant,
+		ContentBlocks: []*schema.ContentBlock{
+			schema.NewContentBlock(&schema.AssistantGenText{Text: "first"}),
+			schema.NewContentBlock(&schema.AssistantGenImage{URL: "https://example.test/image"}),
+			schema.NewContentBlock(&schema.AssistantGenText{Text: "café source"}),
+		},
+		ResponseMeta: &schema.AgenticResponseMeta{GeminiExtension: &gemini.ResponseMetaExtension{GroundingMeta: &gemini.GroundingMetadata{
+			GroundingChunks: []*gemini.GroundingChunk{{Web: &gemini.GroundingChunkWeb{Title: "reference", URI: "https://example.test/source"}}},
+			GroundingSupports: []*gemini.GroundingSupport{{
+				ConfidenceScores:      []float32{0.9},
+				GroundingChunkIndices: []int{0},
+				Segment:               &gemini.Segment{PartIndex: 2, StartIndex: 6, EndIndex: 12, Text: "source"},
+			}},
+		}}},
+	}
+	contexts := []AgenticBlockContext{{BlockID: "first"}, {BlockID: "image"}, {BlockID: "second"}}
+	projected, err := ProjectAgenticMessage(message, testContext(contexts...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	support := projected.ResponseMeta.GeminiGrounding.Supports[0]
+	if support.PartIndex != 2 || support.Text != (*projected.ContentBlocks[2].Text)[support.StartIndex:support.EndIndex] {
+		t.Fatalf("support = %#v", support)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*gemini.Segment)
+	}{
+		{"wrong text", func(segment *gemini.Segment) { segment.Text = "wrong!" }},
+		{"non-text target", func(segment *gemini.Segment) { segment.PartIndex = 1 }},
+		{"mid-rune offset", func(segment *gemini.Segment) { segment.StartIndex = 4; segment.EndIndex = 6; segment.Text = "" }},
+		{"out of range", func(segment *gemini.Segment) { segment.EndIndex = 99 }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			copyMessage := *message
+			copyMeta := *message.ResponseMeta
+			copyExtension := *message.ResponseMeta.GeminiExtension
+			copyGrounding := *message.ResponseMeta.GeminiExtension.GroundingMeta
+			copySupport := *copyGrounding.GroundingSupports[0]
+			copySegment := *copySupport.Segment
+			tc.mutate(&copySegment)
+			copySupport.Segment = &copySegment
+			copyGrounding.GroundingSupports = []*gemini.GroundingSupport{&copySupport}
+			copyExtension.GroundingMeta = &copyGrounding
+			copyMeta.GeminiExtension = &copyExtension
+			copyMessage.ResponseMeta = &copyMeta
+			if _, err := ProjectAgenticMessage(&copyMessage, testContext(contexts...)); err == nil {
+				t.Fatal("invalid grounding was accepted")
 			}
 		})
 	}
@@ -286,12 +410,81 @@ func TestProjectionLimitsAndApprovalCorrelation(t *testing.T) {
 		t.Fatal("one-over block limit was accepted")
 	}
 
-	envelope := &AgenticEnvelopeV1{Version: 1, Kind: EnvelopePaused, Identity: testIdentity(), Paused: &PausedV1{
+	envelope := &AgenticEnvelopeV1{Version: 1, Kind: EnvelopePaused, Identity: testIdentity(), Paused: &PausedV1{PauseID: "pause",
 		Targets:     []InterruptTargetV1{{ID: "interrupt", Address: "node/0"}},
 		Correlation: &ApprovalInterruptCorrelation{ApprovalRequestID: "approval", InterruptTargetID: "different", InterruptAddress: "node/0"},
 	}}
 	if _, err := LifecycleDigestV1(envelope); err == nil {
 		t.Fatal("unvalidated approval correlation was accepted")
+	}
+}
+
+func TestProjectionAcceptsExactAndRejectsOneOverEncodedByteLimits(t *testing.T) {
+	t.Parallel()
+	message := &schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{
+		schema.NewContentBlock(&schema.AssistantGenText{Text: "bounded"}),
+	}}
+	baseContext := testContext(AgenticBlockContext{BlockID: "block"})
+	projected, err := ProjectAgenticMessage(message, baseContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockJSON, err := json.Marshal(projected.ContentBlocks[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	messageWithoutDigest := *projected
+	messageWithoutDigest.Digest = ""
+	messageJSON, err := json.Marshal(&messageWithoutDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	exactBlock := baseContext
+	exactBlock.Limits.MaxBlockBytes = len(blockJSON)
+	if _, err := ProjectAgenticMessage(message, exactBlock); err != nil {
+		t.Fatalf("exact block byte limit rejected: %v", err)
+	}
+	overBlock := exactBlock
+	overBlock.Limits.MaxBlockBytes--
+	if _, err := ProjectAgenticMessage(message, overBlock); err == nil {
+		t.Fatal("one-over block byte limit was accepted")
+	}
+
+	exactMessage := baseContext
+	exactMessage.Limits.MaxMessageBytes = len(messageJSON)
+	if _, err := ProjectAgenticMessage(message, exactMessage); err != nil {
+		t.Fatalf("exact message byte limit rejected: %v", err)
+	}
+	overMessage := exactMessage
+	overMessage.Limits.MaxMessageBytes--
+	if _, err := ProjectAgenticMessage(message, overMessage); err == nil {
+		t.Fatal("one-over message byte limit was accepted")
+	}
+}
+
+func TestEnvelopeStrictDecodeRejectsMalformedProviderAnnotation(t *testing.T) {
+	t.Parallel()
+	message := &schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{
+		schema.NewContentBlock(&schema.AssistantGenText{Text: "source", OpenAIExtension: &openai.AssistantGenTextExtension{Annotations: []*openai.TextAnnotation{{
+			Type: openai.TextAnnotationTypeURLCitation,
+			URLCitation: &openai.TextAnnotationURLCitation{
+				URL: "https://example.test", StartIndex: 0, EndIndex: 6,
+			},
+		}}}}),
+	}}
+	projection, err := ToAgenticProjection(message, testContext(AgenticBlockContext{BlockID: "block"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope := projection.Blocks[0].Supplement
+	envelope.ContentBlock.ProviderAnnotations.OpenAI[0].URL = ""
+	encoded, err := json.Marshal(&envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeAgenticEnvelope(encoded); err == nil {
+		t.Fatal("malformed provider annotation was accepted")
 	}
 }
 
@@ -309,6 +502,18 @@ func TestFixedDigestVectors(t *testing.T) {
 	}
 	const wantProjection = "1278a78185c973ceee246c84bc2f69b40632853cc428cef3094f4c099eb93c47"
 	const wantLifecycle = "50a2df185754f533c91bce45deb459b93029c77ada20baf50aee0a96aa908d00"
+	independentDigest := func(prefix, canonical string) CandidateDigestV1 {
+		sum := sha256.Sum256(append([]byte(prefix), canonical...))
+		return CandidateDigestV1(fmt.Sprintf("%x", sum))
+	}
+	manualProjection := `{"contentBlocks":[],"identity":{"agentPath":[{"name":"root","runId":"run-1"}],"attemptId":"attempt-1","messageId":"message-1","runId":"run-1","sessionId":"session-1","threadId":"session-1","turnId":"turn-1"},"role":"assistant","version":1}`
+	manualLifecycle := `{"identity":{"agentPath":[{"name":"root","runId":"run-1"}],"attemptId":"attempt-1","messageId":"message-1","runId":"run-1","sessionId":"session-1","threadId":"session-1","turnId":"turn-1"},"kind":"turn_finished","lifecycle":{"detail":"committed"},"version":1}`
+	if got := independentDigest("eino-agentic-v1\x00projection\x00", manualProjection); got != wantProjection {
+		t.Fatalf("independent projection digest = %s", got)
+	}
+	if got := independentDigest("eino-agentic-v1\x00lifecycle\x00turn_finished\x00", manualLifecycle); got != wantLifecycle {
+		t.Fatalf("independent lifecycle digest = %s", got)
+	}
 	if projectionDigest != wantProjection {
 		t.Fatalf("projection digest = %s", projectionDigest)
 	}

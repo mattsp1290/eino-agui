@@ -7,8 +7,63 @@
     "files": ["sdks/community/go/pkg/core/events", "sdks/community/go/pkg/encoding/sse"]
   },
   "frames": [
-    {"event": "TEXT_MESSAGE_CHUNK_<runtime>", "data": {"type": "TEXT_MESSAGE_CHUNK", "metadata": {"eino.agentic.v1": {"sessionId": "session-golden", "threadId": "session-golden", "runId": "run-golden", "turnId": "turn-golden", "messageId": "message-golden", "blockId": "block-golden", "attemptId": "attempt-golden", "agentPath": [{"name": "root", "runId": "run-golden"}], "transient": true}}, "messageId": "message-golden", "role": "assistant", "delta": "hello"}},
-    {"event": "CUSTOM_<runtime>", "data": {"type": "CUSTOM", "name": "eino.agentic.v1", "value": {"version": 1, "kind": "content_block"}}}
+    {
+      "id": "<sse-id>",
+      "data": {
+        "delta": "hello",
+        "messageId": "message-golden",
+        "metadata": {"eino.agentic.v1": {"agentPath": [{"name": "root", "runId": "run-golden"}], "attemptId": "attempt-golden", "blockId": "block-golden", "messageId": "message-golden", "runId": "run-golden", "sessionId": "session-golden", "threadId": "session-golden", "transient": true, "turnId": "turn-golden"}},
+        "role": "assistant",
+        "timestamp": "<timestamp>",
+        "type": "TEXT_MESSAGE_CHUNK"
+      }
+    },
+    {
+      "id": "<sse-id>",
+      "data": {
+        "metadata": {"eino.agentic.v1": {"agentPath": [{"name": "root", "runId": "run-golden"}], "attemptId": "attempt-golden", "blockId": "block-golden", "messageId": "message-golden", "runId": "run-golden", "sessionId": "session-golden", "threadId": "session-golden", "turnId": "turn-golden"}},
+        "name": "eino.agentic.v1",
+        "timestamp": "<timestamp>",
+        "type": "CUSTOM",
+        "value": {
+          "contentBlock": {"identity": {"agentPath": [{"name": "root", "runId": "run-golden"}], "attemptId": "attempt-golden", "blockId": "block-golden", "messageId": "message-golden", "runId": "run-golden", "sessionId": "session-golden", "threadId": "session-golden", "turnId": "turn-golden"}, "text": "hello", "type": "assistant_gen_text"},
+          "digest": "dabf83fe81ac9240ff5eb2f287d65540244803e28881fccfc6c4646c3f25a85b",
+          "identity": {"agentPath": [{"name": "root", "runId": "run-golden"}], "attemptId": "attempt-golden", "blockId": "block-golden", "messageId": "message-golden", "runId": "run-golden", "sessionId": "session-golden", "threadId": "session-golden", "turnId": "turn-golden"},
+          "kind": "content_block",
+          "version": 1
+        }
+      }
+    },
+    {
+      "id": "<sse-id>",
+      "data": {
+        "metadata": {"eino.agentic.v1": {"agentPath": [{"name": "root", "runId": "run-golden"}], "attemptId": "attempt-golden", "messageId": "message-golden", "runId": "run-golden", "sessionId": "session-golden", "threadId": "session-golden", "turnId": "turn-golden"}},
+        "name": "eino.agentic.v1",
+        "timestamp": "<timestamp>",
+        "type": "CUSTOM",
+        "value": {"digest": "af709ff1aa8377f3ebfffedc18677ef89811ca28f58c06a23c3a181fc183df00", "identity": {"agentPath": [{"name": "root", "runId": "run-golden"}], "attemptId": "attempt-golden", "messageId": "message-golden", "runId": "run-golden", "sessionId": "session-golden", "threadId": "session-golden", "turnId": "turn-golden"}, "kind": "response_meta", "responseMeta": {"tokenUsage": {"inputTokens": 2, "outputTokens": 1, "totalTokens": 3}}, "version": 1}
+      }
+    },
+    {
+      "id": "<sse-id>",
+      "data": {
+        "metadata": {"eino.agentic.v1": {"agentPath": [{"name": "root", "runId": "run-golden"}], "attemptId": "attempt-golden", "messageId": "message-golden", "runId": "run-golden", "sessionId": "session-golden", "threadId": "session-golden", "turnId": "turn-golden"}},
+        "name": "eino.agentic.v1",
+        "timestamp": "<timestamp>",
+        "type": "CUSTOM",
+        "value": {"digest": "8429d68bcdd101f964ed05b1251f7dcc1ff7607a37ea86033b7e90c8858282ef", "identity": {"agentPath": [{"name": "root", "runId": "run-golden"}], "attemptId": "attempt-golden", "messageId": "message-golden", "runId": "run-golden", "sessionId": "session-golden", "threadId": "session-golden", "turnId": "turn-golden"}, "kind": "paused", "paused": {"pauseId": "pause-golden", "targets": [{"address": "agent:root;node:approval", "id": "interrupt-golden"}]}, "version": 1}
+      }
+    },
+    {
+      "id": "<sse-id>",
+      "data": {
+        "metadata": {"eino.agentic.v1": {"agentPath": [{"name": "root", "runId": "run-golden"}], "attemptId": "attempt-golden", "messageId": "message-golden", "runId": "run-golden", "sessionId": "session-golden", "threadId": "session-golden", "turnId": "turn-golden"}},
+        "name": "eino.agentic.v1",
+        "timestamp": "<timestamp>",
+        "type": "CUSTOM",
+        "value": {"digest": "41e39d56a0dc356fa2cdb1180b9a99d4c5aa4f9a409310af2f3fe2b7690b9cfe", "identity": {"agentPath": [{"name": "root", "runId": "run-golden"}], "attemptId": "attempt-golden", "messageId": "message-golden", "runId": "run-golden", "sessionId": "session-golden", "threadId": "session-golden", "turnId": "turn-golden"}, "kind": "resumed", "resumed": {"full": true, "newAttemptId": "attempt-resumed", "newTurnId": "turn-resumed", "pauseId": "pause-golden", "targets": [{"address": "agent:root;node:approval", "id": "interrupt-golden"}]}, "version": 1}
+      }
+    }
   ],
   "mergeRule": "replace transient/native view by full identity; never append the custom supplement as a second logical block"
 }

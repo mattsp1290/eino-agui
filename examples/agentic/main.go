@@ -60,7 +60,7 @@ func main() {
 	emit.SubagentFinishedCommitted(*childFinished.Lifecycle, receipt(childFinished, "revision-child-finish"))
 
 	targets := []convert.InterruptTargetV1{{ID: "interrupt-1", Address: "agent:root;tool:approval"}}
-	paused := &convert.AgenticEnvelopeV1{Version: 1, Kind: convert.EnvelopePaused, Identity: base, Paused: &convert.PausedV1{Targets: targets}}
+	paused := &convert.AgenticEnvelopeV1{Version: 1, Kind: convert.EnvelopePaused, Identity: base, Paused: &convert.PausedV1{PauseID: "pause-1", Targets: targets}}
 	emit.Paused(*paused.Paused, receipt(paused, "revision-pause"))
 	resumed := &convert.AgenticEnvelopeV1{Version: 1, Kind: convert.EnvelopeResumed, Identity: base, Resumed: &convert.ResumedV1{PauseID: "pause-1", Targets: targets, Full: true, NewTurnID: "turn-3", NewAttemptID: "attempt-3"}}
 	emit.Resumed(*resumed.Resumed, receipt(resumed, "revision-resume"))

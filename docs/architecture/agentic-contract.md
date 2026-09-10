@@ -6,6 +6,28 @@ or decide when a run is complete.
 
 ## Public entry points
 
+The primary exported signatures are:
+
+```go
+func convert.DefaultProjectionLimits() convert.ProjectionLimits
+func convert.ToAgenticProjection(*schema.AgenticMessage, convert.AgenticProjectionContext) (*convert.AgenticProjection, error)
+func convert.ProjectionDigestV1(*convert.PublicAgenticMessage) (convert.CandidateDigestV1, error)
+func convert.LifecycleDigestV1(*convert.AgenticEnvelopeV1) (convert.CandidateDigestV1, error)
+func convert.DecodeAgenticEnvelope(any) (*convert.AgenticEnvelopeV1, error)
+
+func emitter.NewObserverEmitter(context.Context, *bufio.Writer, *sse.SSEWriter) *emitter.Emitter
+func emitter.NewObserverSink(*emitter.Emitter) *emitter.ObserverSink
+
+func stream.StreamAgenticTurn(context.Context, model.AgenticModel, []*schema.AgenticMessage,
+    stream.AgenticStreamIdentity, stream.BlockContextResolver, ...stream.AgenticOption) (*stream.AgenticResult, error)
+func stream.NewAgentEventSource(*adk.AsyncIterator[*adk.TypedAgentEvent[*schema.AgenticMessage]],
+    func(error), func(context.Context) error) (stream.AgentEventSource, error)
+func stream.DrainAgenticEvents(context.Context, stream.AgentEventSource,
+    stream.AgentEventIdentityResolver, ...stream.AgentEventOption) (*stream.AgentEventResult, error)
+func stream.WithAgentEventCancellationCandidate(stream.AgenticStreamIdentity,
+    convert.CancelledV1) stream.AgentEventOption
+```
+
 Conversion starts with:
 
 ```go
@@ -23,9 +45,13 @@ server ID. Approval responses require the expected native MCP request ID.
 Native MCP request IDs and ADK interrupt IDs/addresses are separate fields;
 the bridge accepts a correlation only when the host supplies the complete pair.
 
-One model request is observed with:
+One model request is observed with an observer-only emitter adapter. The
+emitter context belongs to that observer connection; `ctx` remains the separate
+host execution context:
 
 ```go
+emit := emitter.NewObserverEmitter(observerCtx, writer, sseWriter)
+sink := emitter.NewObserverSink(emit)
 result, err := stream.StreamAgenticTurn(
     ctx, agenticModel, messages, stream.AgenticStreamIdentity{...}, resolver,
     stream.WithTransientSink(sink),
@@ -42,13 +68,20 @@ a wait hook that joins the producer:
 
 ```go
 source, err := stream.NewAgentEventSource(iterator, abort, wait)
-result, err := stream.DrainAgenticEvents(ctx, source, identityResolver)
+result, err := stream.DrainAgenticEvents(
+    ctx, source, identityResolver,
+    stream.WithAgentEventCancellationCandidate(ids, cancellationFact),
+)
 ```
 
 Complete and exclusive streamed message variants become candidate projections.
-Business interrupts become public target ID/address records. Cancellation is a
-distinct observation. Transfer, exit, and break-loop remain host control
-observations. Arbitrary customized output/action is rejected.
+For business interrupts, the resolver supplies a durable pause ID alongside the
+public ADK target IDs/addresses and any separately validated MCP approval
+correlation. Cancellation candidates carry the exact resolved turn/attempt
+identity. The optional configured cancellation candidate records host policy if
+the execution context is cancelled; it never causes cancellation. Transfer,
+exit, and break-loop remain host control observations. Arbitrary customized
+output/action is rejected.
 
 ## Commit and delivery
 
@@ -73,6 +106,17 @@ Delivery modes are:
 Run, turn, attempt, pause/resume, cancellation, and subagent helpers also
 require lifecycle receipts. A run finish/error additionally requires
 `loopSettled=true`. Turn completion and pause never imply run completion.
+Paused facts carry a durable `pauseId`; a resume on the same emitter requires
+that committed pause and either its exact full target list or an ordered strict
+subset. Pause IDs cannot be reused within a run. A correlated approval must be
+repeated exactly when its target is resumed, and cannot be inferred or swapped
+to another target. New turn and attempt IDs must differ from the paused identity.
+
+A receipt can authorize one successful logical emission per emitter. Reusing it
+on the same connection is rejected before bytes; a fresh replay emitter has its
+own receipt-consumption state. If a projection has public response metadata, a
+final `response_meta` custom envelope preserves token usage, bounded provider
+terminal details, and Gemini grounding after the ordered content blocks.
 
 ## Content mapping
 

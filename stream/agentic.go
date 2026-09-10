@@ -84,10 +84,9 @@ func StreamAgenticTurn(ctx context.Context, am model.AgenticModel, messages []*s
 			option(&config)
 		}
 	}
-	base := streamIdentity(ids)
 	// Validate identity and limits without opening the source. An empty assistant
 	// message is sufficient because projection performs all shared validation.
-	if _, err := convert.ProjectAgenticMessage(&schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant}, convert.AgenticProjectionContext{Identity: base, Limits: config.limits}); err != nil {
+	if err := validateAgenticStreamIdentity(ids, config.limits); err != nil {
 		return nil, err
 	}
 	input := append([]*schema.AgenticMessage(nil), messages...)
@@ -197,6 +196,9 @@ func (s *agenticDrain) apply(chunk *schema.AgenticMessage) error {
 		}
 		ledger, ok := s.indexed[index]
 		if !ok {
+			if len(s.indexed) >= s.config.limits.MaxBlocks {
+				return errors.New("agentic stream block limit exceeded")
+			}
 			context, err := s.resolver.ResolveBlock(index, block.Type)
 			if err != nil {
 				return fmt.Errorf("resolve agentic block %d: %w", index, err)
@@ -339,6 +341,11 @@ func (s *agenticDrain) finalContexts() ([]convert.AgenticBlockContext, []int) {
 
 func streamIdentity(ids AgenticStreamIdentity) convert.AgenticIdentityV1 {
 	return convert.AgenticIdentityV1{SessionID: ids.SessionID, ThreadID: ids.SessionID, RunID: ids.RunID, TurnID: ids.TurnID, MessageID: ids.MessageID, AttemptID: ids.AttemptID, AgentPath: append([]convert.AgentPathSegment(nil), ids.AgentPath...)}
+}
+
+func validateAgenticStreamIdentity(ids AgenticStreamIdentity, limits convert.ProjectionLimits) error {
+	_, err := convert.ProjectAgenticMessage(&schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant}, convert.AgenticProjectionContext{Identity: streamIdentity(ids), Limits: limits})
+	return err
 }
 
 func accumulateAgenticUsage(target **schema.TokenUsage, next *schema.TokenUsage) {

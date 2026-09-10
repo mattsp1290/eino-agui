@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
@@ -20,6 +21,71 @@ const (
 	DeliveryModeCommittedOnly    DeliveryMode = "committed_only"
 	DeliveryModeReplay           DeliveryMode = "replay"
 )
+
+// ObserverSink adapts an observer-only Emitter to the transient sink contract
+// used by the stream package without coupling either package to the other.
+// Detach disables only this observer; it never cancels host execution.
+type ObserverSink struct {
+	emitter   *Emitter
+	detached  bool
+	detachErr error
+}
+
+type committedPause struct {
+	identity    convert.AgenticIdentityV1
+	targets     []convert.InterruptTargetV1
+	correlation *convert.ApprovalInterruptCorrelation
+}
+
+// NewObserverSink adapts an Emitter created by NewObserverEmitter for use with
+// stream.WithTransientSink or stream.WithAgentEventTransientSink.
+func NewObserverSink(emitter *Emitter) *ObserverSink {
+	return &ObserverSink{emitter: emitter}
+}
+
+// Emit writes one transient event and translates the Emitter's bool/error
+// surface into the stream sink's error surface.
+func (s *ObserverSink) Emit(event events.Event) error {
+	if s == nil || s.emitter == nil {
+		return errors.New("observer emitter is required")
+	}
+	if s.detached {
+		if s.detachErr != nil {
+			return s.detachErr
+		}
+		return errors.New("observer sink is detached")
+	}
+	if err := s.emitter.ctx.Err(); err != nil {
+		return err
+	}
+	if s.emitter.Emit(event) {
+		return nil
+	}
+	if err := s.emitter.Err(); err != nil {
+		return err
+	}
+	if err := s.emitter.EncErr(); err != nil {
+		return err
+	}
+	return errors.New("observer event was not emitted")
+}
+
+// Detach records the first observer failure and disables later writes.
+func (s *ObserverSink) Detach(err error) {
+	if s == nil || s.detached {
+		return
+	}
+	s.detached = true
+	s.detachErr = err
+}
+
+// Err returns the error that detached this observer, if any.
+func (s *ObserverSink) Err() error {
+	if s == nil {
+		return nil
+	}
+	return s.detachErr
+}
 
 // NewObserverEmitter creates a transport observer with no execution-cancel
 // callback. A failed observer detaches without changing host execution state.
@@ -57,6 +123,9 @@ func (e *Emitter) EmitCommittedProjection(projection *convert.AgenticProjection,
 	}
 	if err := convert.ValidateCommitReceipt(receipt, projection.Public, nil); err != nil {
 		e.recordEncodingError(err)
+		return false
+	}
+	if !e.allowAgenticReceipt(receipt) {
 		return false
 	}
 	if mode != DeliveryModeLiveContinuation && mode != DeliveryModeCommittedOnly && mode != DeliveryModeReplay {
@@ -100,6 +169,22 @@ func (e *Emitter) EmitCommittedProjection(projection *convert.AgenticProjection,
 		}
 		groups[i] = group
 	}
+	if projection.Public.ResponseMeta != nil {
+		envelope := convert.AgenticEnvelopeV1{Version: convert.AgenticSchemaVersion, Kind: convert.EnvelopeResponseMeta, Identity: projection.Public.Identity, ResponseMeta: projection.Public.ResponseMeta}
+		digest, err := convert.LifecycleDigestV1(&envelope)
+		if err != nil {
+			e.recordEncodingError(err)
+			return false
+		}
+		envelope.Digest = digest
+		custom := events.NewCustomEvent(convert.AgenticCustomEventName, events.WithValue(&envelope))
+		custom.GetBaseEvent().Metadata = map[string]any{convert.AgenticCustomEventName: envelope.Identity}
+		group := []events.Event{custom}
+		if !e.prevalidate(group) {
+			return false
+		}
+		groups = append(groups, group)
+	}
 	for _, group := range groups {
 		for _, event := range group {
 			if !e.Emit(event) {
@@ -108,6 +193,7 @@ func (e *Emitter) EmitCommittedProjection(projection *convert.AgenticProjection,
 		}
 	}
 	e.recordAgenticOutput(projection.Public.Identity)
+	e.recordAgenticReceipt(receipt)
 	return true
 }
 
@@ -134,10 +220,59 @@ func (e *Emitter) AttemptReplaced(input convert.AttemptReplacedV1, receipt conve
 	return true
 }
 func (e *Emitter) Paused(input convert.PausedV1, receipt convert.CommitReceiptV1) bool {
-	return e.emitLifecycle(convert.EnvelopePaused, receipt, func(v *convert.AgenticEnvelopeV1) { v.Paused = &input })
+	key := agenticPauseKey(receipt.Identity, input.PauseID)
+	if _, exists := e.agenticPauses[key]; exists {
+		e.recordEncodingError(errors.New("pause ID has already been committed for this run"))
+		return false
+	}
+	if !e.emitLifecycle(convert.EnvelopePaused, receipt, func(v *convert.AgenticEnvelopeV1) { v.Paused = &input }) {
+		return false
+	}
+	if e.agenticPauses == nil {
+		e.agenticPauses = make(map[string]committedPause)
+	}
+	var correlation *convert.ApprovalInterruptCorrelation
+	if input.Correlation != nil {
+		copyCorrelation := *input.Correlation
+		correlation = &copyCorrelation
+	}
+	e.agenticPauses[key] = committedPause{identity: receipt.Identity, targets: append([]convert.InterruptTargetV1(nil), input.Targets...), correlation: correlation}
+	return true
 }
 func (e *Emitter) Resumed(input convert.ResumedV1, receipt convert.CommitReceiptV1) bool {
-	return e.emitLifecycle(convert.EnvelopeResumed, receipt, func(v *convert.AgenticEnvelopeV1) { v.Resumed = &input })
+	key := agenticPauseKey(receipt.Identity, input.PauseID)
+	pause, ok := e.agenticPauses[key]
+	if !ok {
+		e.recordEncodingError(errors.New("resume requires a preceding committed pause"))
+		return false
+	}
+	if !reflect.DeepEqual(pause.identity, receipt.Identity) {
+		e.recordEncodingError(errors.New("resume identity does not match the committed pause"))
+		return false
+	}
+	remaining, err := resumedTargets(pause.targets, input.Targets, input.Full)
+	if err != nil {
+		e.recordEncodingError(err)
+		return false
+	}
+	correlationResumed, err := validateResumeCorrelation(pause.correlation, input.Correlation, input.Targets)
+	if err != nil {
+		e.recordEncodingError(err)
+		return false
+	}
+	if !e.emitLifecycle(convert.EnvelopeResumed, receipt, func(v *convert.AgenticEnvelopeV1) { v.Resumed = &input }) {
+		return false
+	}
+	if len(remaining) == 0 {
+		delete(e.agenticPauses, key)
+	} else {
+		pause.targets = remaining
+		if correlationResumed {
+			pause.correlation = nil
+		}
+		e.agenticPauses[key] = pause
+	}
+	return true
 }
 func (e *Emitter) Cancelled(input convert.CancelledV1, receipt convert.CommitReceiptV1) bool {
 	return e.emitLifecycle(convert.EnvelopeCancelled, receipt, func(v *convert.AgenticEnvelopeV1) { v.Cancelled = &input })
@@ -204,6 +339,9 @@ func (e *Emitter) emitLifecycleWithNative(kind convert.AgenticEnvelopeKind, rece
 		e.recordEncodingError(err)
 		return false
 	}
+	if !e.allowAgenticReceipt(receipt) {
+		return false
+	}
 	event := events.NewCustomEvent(convert.AgenticCustomEventName, events.WithValue(envelope))
 	event.GetBaseEvent().Metadata = map[string]any{convert.AgenticCustomEventName: envelope.Identity}
 	group := append(append([]events.Event(nil), native...), event)
@@ -218,6 +356,7 @@ func (e *Emitter) emitLifecycleWithNative(kind convert.AgenticEnvelopeKind, rece
 			return false
 		}
 	}
+	e.recordAgenticReceipt(receipt)
 	return true
 }
 
@@ -293,14 +432,114 @@ func agenticMessageKey(identity convert.AgenticIdentityV1) string {
 	}
 	var key strings.Builder
 	for _, value := range []string{identity.SessionID, identity.RunID, identity.TurnID, identity.MessageID} {
-		key.WriteString(value)
-		key.WriteByte(0)
+		writeAgenticKeyPart(&key, value)
 	}
 	for _, segment := range identity.AgentPath {
-		key.WriteString(segment.Name)
-		key.WriteByte(0)
-		key.WriteString(segment.RunID)
-		key.WriteByte(0)
+		writeAgenticKeyPart(&key, segment.Name)
+		writeAgenticKeyPart(&key, segment.RunID)
 	}
 	return key.String()
+}
+
+func agenticPauseKey(identity convert.AgenticIdentityV1, pauseID string) string {
+	if identity.SessionID == "" || identity.RunID == "" || pauseID == "" {
+		return ""
+	}
+	var key strings.Builder
+	for _, value := range []string{identity.SessionID, identity.RunID, pauseID} {
+		writeAgenticKeyPart(&key, value)
+	}
+	return key.String()
+}
+
+func (e *Emitter) allowAgenticReceipt(receipt convert.CommitReceiptV1) bool {
+	if _, exists := e.agenticReceipts[agenticReceiptKey(receipt)]; exists {
+		e.recordEncodingError(errors.New("commit receipt has already been emitted"))
+		return false
+	}
+	return true
+}
+
+func (e *Emitter) recordAgenticReceipt(receipt convert.CommitReceiptV1) {
+	if e.agenticReceipts == nil {
+		e.agenticReceipts = make(map[string]struct{})
+	}
+	e.agenticReceipts[agenticReceiptKey(receipt)] = struct{}{}
+}
+
+func agenticReceiptKey(receipt convert.CommitReceiptV1) string {
+	identity := receipt.Identity
+	var key strings.Builder
+	for _, value := range []string{
+		receipt.Revision, receipt.Domain, string(receipt.Kind), string(receipt.Digest),
+		identity.SessionID, identity.ThreadID, identity.RunID, identity.TurnID,
+		identity.MessageID, identity.BlockID, identity.AttemptID, identity.CallID,
+	} {
+		writeAgenticKeyPart(&key, value)
+	}
+	for _, segment := range identity.AgentPath {
+		writeAgenticKeyPart(&key, segment.Name)
+		writeAgenticKeyPart(&key, segment.RunID)
+	}
+	return key.String()
+}
+
+func writeAgenticKeyPart(key *strings.Builder, value string) {
+	key.WriteString(strconv.Itoa(len(value)))
+	key.WriteByte(':')
+	key.WriteString(value)
+}
+
+func resumedTargets(paused, resumed []convert.InterruptTargetV1, full bool) ([]convert.InterruptTargetV1, error) {
+	if full && !reflect.DeepEqual(paused, resumed) {
+		return nil, errors.New("full resume targets must exactly match the committed pause")
+	}
+	if !full && len(resumed) >= len(paused) {
+		return nil, errors.New("partial resume must select a strict subset of committed pause targets")
+	}
+	remaining := append([]convert.InterruptTargetV1(nil), paused...)
+	position := 0
+	for _, target := range resumed {
+		found := -1
+		for i := position; i < len(paused); i++ {
+			if paused[i] == target {
+				found = i
+				break
+			}
+		}
+		if found < 0 {
+			return nil, errors.New("resume targets must be an ordered subset of the committed pause")
+		}
+		position = found + 1
+		for i, candidate := range remaining {
+			if candidate == target {
+				remaining = append(remaining[:i], remaining[i+1:]...)
+				break
+			}
+		}
+	}
+	return remaining, nil
+}
+
+func validateResumeCorrelation(paused, resumed *convert.ApprovalInterruptCorrelation, targets []convert.InterruptTargetV1) (bool, error) {
+	if paused == nil {
+		if resumed != nil {
+			return false, errors.New("resume correlation was not present on the committed pause")
+		}
+		return false, nil
+	}
+	selected := false
+	for _, target := range targets {
+		if target.ID == paused.InterruptTargetID && target.Address == paused.InterruptAddress {
+			selected = true
+			break
+		}
+	}
+	if selected && !reflect.DeepEqual(paused, resumed) {
+		return false, errors.New("resume correlation must match the committed pause")
+	}
+	if !selected && resumed != nil {
+		return false, errors.New("resume correlation target is not being resumed")
+	}
+	return selected, nil
 }

@@ -139,6 +139,8 @@ owner ID to stderr.
 The rich path accepts `schema.AgenticMessage` and `model.AgenticModel` directly:
 
 ```go
+emit := emitter.NewObserverEmitter(observerCtx, writer, sseWriter)
+observer := emitter.NewObserverSink(emit)
 candidate, err := stream.StreamAgenticTurn(ctx, agenticModel, messages, ids, blockResolver,
     stream.WithTransientSink(observer),
 )
@@ -152,12 +154,23 @@ if err == nil {
 For typed ADK streams, wrap the raw iterator with abort and wait hooks connected
 to the same producer, then call `stream.DrainAgenticEvents`. Observer failure
 detaches only that sink; execution cancellation comes from the host context.
+The event resolver supplies durable pause IDs and optional separately validated
+MCP approval correlation. If context cancellation should yield a committed
+candidate, pass the host-decided identity and classification through
+`stream.WithAgentEventCancellationCandidate`.
 
 All authoritative projections and lifecycle facts require a matching
 host-created `convert.CommitReceiptV1`. The bridge does not persist sessions,
 execute tools, own checkpoints, authorize approvals, retry model calls, or infer
 run completion. `TURN_FINISHED` and pause are nonterminal; committed run endings
 require explicit `loopSettled=true`.
+
+Each receipt is consumed at most once by an emitter, preventing duplicate native
+content on one connection. A fresh emitter may use the same receipt for replay
+after reconnect. Committed projections emit a `response_meta` custom supplement
+when token usage, provider terminal details, or Gemini grounding are present.
+Committed pause IDs are unique within a run, and approval correlation must match
+the paused target exactly when that target resumes.
 
 User-role projections expose a sanitized `NativeMessage` for host-assembled
 full transcript snapshots. Model input slices and their pointed-to messages are

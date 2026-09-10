@@ -15,7 +15,10 @@ import (
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/mattsp1290/eino-agui/convert"
+	"github.com/mattsp1290/eino-agui/emitter"
+	"github.com/mattsp1290/eino-agui/internal/golden"
 	"github.com/mattsp1290/eino-agui/internal/testmodel"
+	"github.com/mattsp1290/eino-agui/internal/testsse"
 )
 
 type readerAgenticModel struct {
@@ -25,6 +28,23 @@ type readerAgenticModel struct {
 type contextClosingAgenticModel struct {
 	reader *schema.StreamReader[*schema.AgenticMessage]
 	writer *schema.StreamWriter[*schema.AgenticMessage]
+}
+
+type sliceMutatingAgenticModel struct {
+	chunks []*schema.AgenticMessage
+}
+
+func (m sliceMutatingAgenticModel) Generate(context.Context, []*schema.AgenticMessage, ...model.Option) (*schema.AgenticMessage, error) {
+	return nil, errors.New("not used")
+}
+func (m sliceMutatingAgenticModel) Stream(_ context.Context, input []*schema.AgenticMessage, options ...model.Option) (*schema.StreamReader[*schema.AgenticMessage], error) {
+	if len(input) != 0 {
+		input[0] = nil
+	}
+	if len(options) != 0 {
+		options[0] = model.Option{}
+	}
+	return schema.StreamReaderFromArray(m.chunks), nil
 }
 
 func (m readerAgenticModel) Generate(context.Context, []*schema.AgenticMessage, ...model.Option) (*schema.AgenticMessage, error) {
@@ -119,6 +139,43 @@ func TestStreamAgenticTurnCorrelatesIndexedChunks(t *testing.T) {
 	}
 }
 
+func TestStreamAgenticTurnAllAssistantContentKinds(t *testing.T) {
+	t.Parallel()
+	code := int64(7)
+	tests := []struct {
+		name    string
+		block   *schema.ContentBlock
+		context convert.AgenticBlockContext
+	}{
+		{"reasoning", schema.NewContentBlock(&schema.Reasoning{Text: "why"}), convert.AgenticBlockContext{BlockID: "block"}},
+		{"assistant text", schema.NewContentBlock(&schema.AssistantGenText{Text: "answer"}), convert.AgenticBlockContext{BlockID: "block"}},
+		{"assistant image", schema.NewContentBlock(&schema.AssistantGenImage{URL: "https://example.test/image"}), convert.AgenticBlockContext{BlockID: "block"}},
+		{"assistant audio", schema.NewContentBlock(&schema.AssistantGenAudio{URL: "https://example.test/audio"}), convert.AgenticBlockContext{BlockID: "block"}},
+		{"assistant video", schema.NewContentBlock(&schema.AssistantGenVideo{URL: "https://example.test/video"}), convert.AgenticBlockContext{BlockID: "block"}},
+		{"function call", schema.NewContentBlock(&schema.FunctionToolCall{CallID: "function", Name: "lookup", Arguments: `{}`}), convert.AgenticBlockContext{BlockID: "block"}},
+		{"server call", schema.NewContentBlock(&schema.ServerToolCall{CallID: "server", Name: "search", Arguments: map[string]any{"q": "go"}}), convert.AgenticBlockContext{BlockID: "block", ProviderServerID: "provider"}},
+		{"server result", schema.NewContentBlock(&schema.ServerToolResult{CallID: "server", Name: "search", Content: []any{"result"}}), convert.AgenticBlockContext{BlockID: "block", ProviderServerID: "provider"}},
+		{"MCP call", schema.NewContentBlock(&schema.MCPToolCall{ServerLabel: "server", CallID: "mcp", Name: "lookup", Arguments: `{}`}), convert.AgenticBlockContext{BlockID: "block"}},
+		{"MCP result", schema.NewContentBlock(&schema.MCPToolResult{ServerLabel: "server", CallID: "mcp", Name: "lookup", Content: `{}`, Error: &schema.MCPToolCallError{Code: &code, Message: "failed"}}), convert.AgenticBlockContext{BlockID: "block"}},
+		{"MCP list", schema.NewContentBlock(&schema.MCPListToolsResult{ServerLabel: "server", Tools: []*schema.MCPListToolsItem{{Name: "lookup"}}}), convert.AgenticBlockContext{BlockID: "block"}},
+		{"MCP approval request", schema.NewContentBlock(&schema.MCPToolApprovalRequest{ID: "approval", ServerLabel: "server", Name: "lookup", Arguments: `{}`}), convert.AgenticBlockContext{BlockID: "block"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			block := *tc.block
+			block.StreamingMeta = &schema.StreamingMeta{Index: 0}
+			message := &schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{&block}}
+			result, err := StreamAgenticTurn(t.Context(), testmodel.NewAgenticReplayModel([]*schema.AgenticMessage{message}), nil, agenticIDs(), testBlockResolver{0: tc.context})
+			if err != nil || result.PublicProjection == nil || len(result.PublicProjection.Public.ContentBlocks) != 1 {
+				t.Fatalf("result=%#v err=%v", result, err)
+			}
+			if got := result.PublicProjection.Public.ContentBlocks[0].Type; got != block.Type {
+				t.Fatalf("type = %q, want %q", got, block.Type)
+			}
+		})
+	}
+}
+
 func TestStreamAgenticTurnDetachesObserverAndFinishes(t *testing.T) {
 	t.Parallel()
 	chunks := testmodel.AgenticTextChunks(0, "one", "two", "three")
@@ -132,6 +189,54 @@ func TestStreamAgenticTurnDetachesObserverAndFinishes(t *testing.T) {
 	}
 	if len(result.DeliveredTransient) != 1 {
 		t.Fatalf("delivered = %d, want 1", len(result.DeliveredTransient))
+	}
+}
+
+func TestStreamAgenticTurnThroughRealObserverEmitter(t *testing.T) {
+	t.Parallel()
+	sseSink := testsse.NewSink()
+	observer := emitter.NewObserverSink(emitter.NewObserverEmitter(t.Context(), sseSink.Writer(), sseSink.SSEWriter()))
+	result, err := StreamAgenticTurn(t.Context(), testmodel.NewAgenticReplayModel(testmodel.AgenticTextChunks(0, "one", "two")), nil, agenticIDs(), testBlockResolver{0: {BlockID: "text"}}, WithTransientSink(observer))
+	if err != nil || result.PublicProjection == nil || result.ObserverErr != nil {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if err := sseSink.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	frames, err := golden.NormalizeSSE(sseSink.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := golden.FrameTypes(frames); !reflect.DeepEqual(got, []string{"TEXT_MESSAGE_CHUNK", "TEXT_MESSAGE_CHUNK"}) {
+		t.Fatalf("types = %v", got)
+	}
+	for _, frame := range frames {
+		identity := frame.Data["metadata"].(map[string]any)[convert.AgenticCustomEventName].(map[string]any)
+		if identity["transient"] != true {
+			t.Fatalf("identity = %#v", identity)
+		}
+	}
+}
+
+func TestStreamAgenticTurnCancelledObserverDoesNotCancelExecution(t *testing.T) {
+	t.Parallel()
+	observerCtx, cancelObserver := context.WithCancel(context.Background())
+	cancelObserver()
+	sseSink := testsse.NewSink()
+	observer := emitter.NewObserverSink(emitter.NewObserverEmitter(observerCtx, sseSink.Writer(), sseSink.SSEWriter()))
+	model := testmodel.NewAgenticReplayModel(testmodel.AgenticTextChunks(0, "one", "two"))
+	result, err := StreamAgenticTurn(t.Context(), model, nil, agenticIDs(), testBlockResolver{0: {BlockID: "text"}}, WithTransientSink(observer))
+	if err != nil || result.PublicProjection == nil || !errors.Is(result.ObserverErr, context.Canceled) || result.Terminal != AgenticTerminalEOF {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if model.Calls() != 1 || len(result.DeliveredTransient) != 0 {
+		t.Fatalf("model calls=%d delivered=%d", model.Calls(), len(result.DeliveredTransient))
+	}
+	if err := sseSink.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if len(sseSink.Bytes()) != 0 {
+		t.Fatalf("cancelled observer bytes = %q", sseSink.Bytes())
 	}
 }
 
@@ -280,9 +385,13 @@ func TestStreamAgenticTurnEnforcesBlockAndByteLimits(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result, err := StreamAgenticTurn(t.Context(), testmodel.NewAgenticReplayModel(tc.chunks), nil, agenticIDs(), tc.resolver, WithProjectionLimits(tc.limits()))
+			sink := &recordingSink{}
+			result, err := StreamAgenticTurn(t.Context(), testmodel.NewAgenticReplayModel(tc.chunks), nil, agenticIDs(), tc.resolver, WithProjectionLimits(tc.limits()), WithTransientSink(sink))
 			if err == nil || result == nil || !result.Partial || result.PublicProjection != nil {
 				t.Fatalf("result=%#v err=%v", result, err)
+			}
+			if tc.name == "block count" && len(result.DeliveredTransient) != 1 {
+				t.Fatalf("delivered transient blocks = %d, want one in-limit prefix", len(result.DeliveredTransient))
 			}
 		})
 	}
@@ -305,6 +414,30 @@ func TestStreamAgenticTurnDoesNotMutateInput(t *testing.T) {
 	}
 	if !reflect.DeepEqual(after, before) {
 		t.Fatalf("input mutated:\nbefore %s\nafter  %s", before, after)
+	}
+}
+
+func TestStreamAgenticTurnCopiesInputAndOptionSlices(t *testing.T) {
+	t.Parallel()
+	input := []*schema.AgenticMessage{{Role: schema.AgenticRoleTypeUser, ContentBlocks: []*schema.ContentBlock{schema.NewContentBlock(&schema.UserInputText{Text: "unchanged"})}}}
+	options := []model.Option{model.WithTemperature(0.25)}
+	result, err := StreamAgenticTurn(
+		t.Context(),
+		sliceMutatingAgenticModel{chunks: testmodel.AgenticTextChunks(0, "answer")},
+		input,
+		agenticIDs(),
+		testBlockResolver{0: {BlockID: "text"}},
+		WithAgenticModelOptions(options...),
+	)
+	if err != nil || result.PublicProjection == nil {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if input[0] == nil || input[0].ContentBlocks[0].UserInputText.Text != "unchanged" {
+		t.Fatalf("input slice was mutated: %#v", input)
+	}
+	gotOptions := model.GetCommonOptions(nil, options...)
+	if gotOptions.Temperature == nil || *gotOptions.Temperature != 0.25 {
+		t.Fatalf("option slice was mutated: %#v", gotOptions)
 	}
 }
 

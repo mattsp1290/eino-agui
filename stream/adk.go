@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -92,8 +93,12 @@ type AgentEventCoordinates struct {
 	OutputOrdinal int
 }
 type AgentEventResolution struct {
-	Identity      AgenticStreamIdentity
-	Blocks        BlockContextResolver
+	Identity AgenticStreamIdentity
+	Blocks   BlockContextResolver
+	// PauseID and Correlation are host-owned inputs used only when the event is
+	// a business interrupt. The bridge never derives either from checkpoint data.
+	PauseID       string
+	Correlation   *convert.ApprovalInterruptCorrelation
 	ParentRunID   string
 	SubagentRunID string
 	Subagent      *SubagentLifecycleResolution
@@ -140,10 +145,17 @@ type SubagentLifecycleCandidate struct {
 	Detail        string
 }
 
+// CancellationCandidate binds a public cancellation observation to the exact
+// host-resolved turn and attempt that it affects.
+type CancellationCandidate struct {
+	Identity     AgenticStreamIdentity
+	Cancellation convert.CancelledV1
+}
+
 type AgentEventResult struct {
 	Projections   []*convert.AgenticProjection
 	Interrupts    []convert.PausedV1
-	Cancellations []convert.CancelledV1
+	Cancellations []CancellationCandidate
 	Controls      []AgentControlObservation
 	Subagents     []SubagentLifecycleCandidate
 	ObserverErr   error
@@ -155,6 +167,7 @@ type agentEventConfig struct {
 	limits          convert.ProjectionLimits
 	cleanupDeadline time.Duration
 	sink            TransientSink
+	cancellation    *CancellationCandidate
 }
 
 func WithAgentEventProjectionLimits(limits convert.ProjectionLimits) AgentEventOption {
@@ -165,6 +178,16 @@ func WithAgentEventCleanupDeadline(deadline time.Duration) AgentEventOption {
 }
 func WithAgentEventTransientSink(sink TransientSink) AgentEventOption {
 	return func(c *agentEventConfig) { c.sink = sink }
+}
+
+// WithAgentEventCancellationCandidate supplies the host-owned identity and
+// policy classification to return if the execution context or a nested stream
+// is cancelled. It does not cause or emit cancellation by itself.
+func WithAgentEventCancellationCandidate(identity AgenticStreamIdentity, cancellation convert.CancelledV1) AgentEventOption {
+	return func(c *agentEventConfig) {
+		identity.AgentPath = append([]convert.AgentPathSegment(nil), identity.AgentPath...)
+		c.cancellation = &CancellationCandidate{Identity: identity, Cancellation: cancellation}
+	}
 }
 
 type CleanupContractError struct{ Err error }
@@ -186,6 +209,15 @@ func DrainAgenticEvents(ctx context.Context, source AgentEventSource, resolver A
 	}
 	if config.cleanupDeadline <= 0 {
 		return nil, errors.New("cleanup deadline must be positive")
+	}
+	if config.cancellation != nil {
+		if err := validateAgenticStreamIdentity(config.cancellation.Identity, config.limits); err != nil {
+			return nil, fmt.Errorf("execution cancellation identity: %w", err)
+		}
+		envelope := &convert.AgenticEnvelopeV1{Version: convert.AgenticSchemaVersion, Kind: convert.EnvelopeCancelled, Identity: streamIdentity(config.cancellation.Identity), Cancelled: &config.cancellation.Cancellation}
+		if _, err := convert.LifecycleDigestV1(envelope); err != nil {
+			return nil, fmt.Errorf("execution cancellation candidate: %w", err)
+		}
 	}
 	result := &AgentEventResult{}
 	finish := func(primary error, abort bool) (*AgentEventResult, error) {
@@ -210,6 +242,7 @@ func DrainAgenticEvents(ctx context.Context, source AgentEventSource, resolver A
 	for ordinal := 0; ; ordinal++ {
 		event, ok, err := source.Next(ctx)
 		if err != nil {
+			appendConfiguredCancellation(result, config.cancellation, err)
 			return finish(err, true)
 		}
 		if !ok {
@@ -222,6 +255,9 @@ func DrainAgenticEvents(ctx context.Context, source AgentEventSource, resolver A
 		if err != nil {
 			return finish(fmt.Errorf("resolve agent event %d: %w", ordinal, err), true)
 		}
+		if err := validateAgenticStreamIdentity(resolution.Identity, config.limits); err != nil {
+			return finish(fmt.Errorf("resolve agent event %d identity: %w", ordinal, err), true)
+		}
 		if resolution.Subagent != nil {
 			candidate, err := projectSubagentLifecycle(event.AgentName, resolution)
 			if err != nil {
@@ -232,7 +268,7 @@ func DrainAgenticEvents(ctx context.Context, source AgentEventSource, resolver A
 		if event.Err != nil {
 			var cancelled *adk.CancelError
 			if errors.As(event.Err, &cancelled) {
-				result.Cancellations = append(result.Cancellations, projectCancel(cancelled))
+				result.Cancellations = append(result.Cancellations, CancellationCandidate{Identity: resolution.Identity, Cancellation: projectCancel(cancelled)})
 				return finish(nil, false)
 			}
 			return finish(event.Err, true)
@@ -249,6 +285,11 @@ func DrainAgenticEvents(ctx context.Context, source AgentEventSource, resolver A
 				result.ObserverErr = observerErr
 			}
 			if err != nil {
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					if config.cancellation != nil && sameStreamIdentity(config.cancellation.Identity, resolution.Identity) {
+						appendConfiguredCancellation(result, config.cancellation, err)
+					}
+				}
 				return finish(err, true)
 			}
 			result.Projections = append(result.Projections, projection)
@@ -258,13 +299,20 @@ func DrainAgenticEvents(ctx context.Context, source AgentEventSource, resolver A
 				return finish(errors.New("customized agent action has no public adapter"), true)
 			}
 			if event.Action.Interrupted != nil {
-				paused, err := projectInterrupt(event.Action.Interrupted, config.limits.MaxInterruptTargets)
+				paused, err := projectInterrupt(event.Action.Interrupted, resolution.PauseID, resolution.Correlation, config.limits.MaxInterruptTargets)
 				if err != nil {
 					return finish(err, true)
+				}
+				envelope := &convert.AgenticEnvelopeV1{Version: convert.AgenticSchemaVersion, Kind: convert.EnvelopePaused, Identity: streamIdentity(resolution.Identity), Paused: &paused}
+				if _, err := convert.LifecycleDigestV1(envelope); err != nil {
+					return finish(fmt.Errorf("project interrupt: %w", err), true)
 				}
 				result.Interrupts = append(result.Interrupts, paused)
 			}
 			if event.Action.TransferToAgent != nil {
+				if event.Action.TransferToAgent.DestAgentName == "" {
+					return finish(errors.New("agent transfer destination is required"), true)
+				}
 				result.Controls = append(result.Controls, AgentControlObservation{Kind: AgentControlTransfer, Destination: event.Action.TransferToAgent.DestAgentName})
 			}
 			if event.Action.Exit {
@@ -275,6 +323,19 @@ func DrainAgenticEvents(ctx context.Context, source AgentEventSource, resolver A
 			}
 		}
 	}
+}
+
+func appendConfiguredCancellation(result *AgentEventResult, candidate *CancellationCandidate, err error) {
+	if candidate == nil || (!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)) || len(result.Cancellations) != 0 {
+		return
+	}
+	copyCandidate := *candidate
+	copyCandidate.Identity.AgentPath = append([]convert.AgentPathSegment(nil), candidate.Identity.AgentPath...)
+	result.Cancellations = append(result.Cancellations, copyCandidate)
+}
+
+func sameStreamIdentity(left, right AgenticStreamIdentity) bool {
+	return left.SessionID == right.SessionID && left.RunID == right.RunID && left.TurnID == right.TurnID && left.MessageID == right.MessageID && left.AttemptID == right.AttemptID && reflect.DeepEqual(left.AgentPath, right.AgentPath)
 }
 
 func projectSubagentLifecycle(agentName string, resolution AgentEventResolution) (SubagentLifecycleCandidate, error) {
@@ -352,11 +413,18 @@ func drainAgentMessageOutput(ctx context.Context, output *adk.TypedMessageVarian
 	return projection, nil, err
 }
 
-func projectInterrupt(info *adk.InterruptInfo, maxTargets int) (convert.PausedV1, error) {
+func projectInterrupt(info *adk.InterruptInfo, pauseID string, correlation *convert.ApprovalInterruptCorrelation, maxTargets int) (convert.PausedV1, error) {
+	if pauseID == "" {
+		return convert.PausedV1{}, errors.New("interrupt requires a host-assigned pause ID")
+	}
 	if info == nil || len(info.InterruptContexts) == 0 || len(info.InterruptContexts) > maxTargets {
 		return convert.PausedV1{}, errors.New("interrupt has no public targets")
 	}
-	out := convert.PausedV1{Targets: make([]convert.InterruptTargetV1, len(info.InterruptContexts))}
+	out := convert.PausedV1{PauseID: pauseID, Targets: make([]convert.InterruptTargetV1, len(info.InterruptContexts))}
+	if correlation != nil {
+		copyCorrelation := *correlation
+		out.Correlation = &copyCorrelation
+	}
 	seen := map[string]bool{}
 	for i, interrupt := range info.InterruptContexts {
 		if interrupt == nil {

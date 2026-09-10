@@ -272,20 +272,20 @@ type PublicAgenticMessage struct {
 type AgenticEnvelopeKind string
 
 const (
-	EnvelopeContentBlock        AgenticEnvelopeKind = "content_block"
-	EnvelopeProviderAnnotations AgenticEnvelopeKind = "provider_annotations"
-	EnvelopeRunStarted          AgenticEnvelopeKind = "run_started"
-	EnvelopeRunFinished         AgenticEnvelopeKind = "run_finished"
-	EnvelopeRunError            AgenticEnvelopeKind = "run_error"
-	EnvelopeTurnStarted         AgenticEnvelopeKind = "turn_started"
-	EnvelopeTurnFinished        AgenticEnvelopeKind = "turn_finished"
-	EnvelopeAttemptReplaced     AgenticEnvelopeKind = "attempt_replaced"
-	EnvelopeSubagentStarted     AgenticEnvelopeKind = "subagent_started"
-	EnvelopeSubagentFinished    AgenticEnvelopeKind = "subagent_finished"
-	EnvelopeSubagentError       AgenticEnvelopeKind = "subagent_error"
-	EnvelopePaused              AgenticEnvelopeKind = "paused"
-	EnvelopeResumed             AgenticEnvelopeKind = "resumed"
-	EnvelopeCancelled           AgenticEnvelopeKind = "cancelled"
+	EnvelopeContentBlock     AgenticEnvelopeKind = "content_block"
+	EnvelopeResponseMeta     AgenticEnvelopeKind = "response_meta"
+	EnvelopeRunStarted       AgenticEnvelopeKind = "run_started"
+	EnvelopeRunFinished      AgenticEnvelopeKind = "run_finished"
+	EnvelopeRunError         AgenticEnvelopeKind = "run_error"
+	EnvelopeTurnStarted      AgenticEnvelopeKind = "turn_started"
+	EnvelopeTurnFinished     AgenticEnvelopeKind = "turn_finished"
+	EnvelopeAttemptReplaced  AgenticEnvelopeKind = "attempt_replaced"
+	EnvelopeSubagentStarted  AgenticEnvelopeKind = "subagent_started"
+	EnvelopeSubagentFinished AgenticEnvelopeKind = "subagent_finished"
+	EnvelopeSubagentError    AgenticEnvelopeKind = "subagent_error"
+	EnvelopePaused           AgenticEnvelopeKind = "paused"
+	EnvelopeResumed          AgenticEnvelopeKind = "resumed"
+	EnvelopeCancelled        AgenticEnvelopeKind = "cancelled"
 )
 
 type LifecycleFactV1 struct {
@@ -307,6 +307,7 @@ type InterruptTargetV1 struct {
 	Address string `json:"address"`
 }
 type PausedV1 struct {
+	PauseID     string                        `json:"pauseId"`
 	Targets     []InterruptTargetV1           `json:"targets"`
 	Correlation *ApprovalInterruptCorrelation `json:"correlation,omitempty"`
 }
@@ -327,15 +328,15 @@ type TurnStartedV1 = LifecycleFactV1
 type TurnFinishedV1 = LifecycleFactV1
 
 type AgenticEnvelopeV1 struct {
-	Version             int                        `json:"version"`
-	Kind                AgenticEnvelopeKind        `json:"kind"`
-	Identity            AgenticIdentityV1          `json:"identity"`
-	ContentBlock        *PublicContentBlock        `json:"contentBlock,omitempty"`
-	ProviderAnnotations *PublicProviderAnnotations `json:"providerAnnotations,omitempty"`
-	Lifecycle           *LifecycleFactV1           `json:"lifecycle,omitempty"`
-	AttemptReplaced     *AttemptReplacedV1         `json:"attemptReplaced,omitempty"`
-	Paused              *PausedV1                  `json:"paused,omitempty"`
-	Resumed             *ResumedV1                 `json:"resumed,omitempty"`
-	Cancelled           *CancelledV1               `json:"cancelled,omitempty"`
-	Digest              CandidateDigestV1          `json:"digest,omitempty"`
+	Version         int                 `json:"version"`
+	Kind            AgenticEnvelopeKind `json:"kind"`
+	Identity        AgenticIdentityV1   `json:"identity"`
+	ContentBlock    *PublicContentBlock `json:"contentBlock,omitempty"`
+	ResponseMeta    *PublicResponseMeta `json:"responseMeta,omitempty"`
+	Lifecycle       *LifecycleFactV1    `json:"lifecycle,omitempty"`
+	AttemptReplaced *AttemptReplacedV1  `json:"attemptReplaced,omitempty"`
+	Paused          *PausedV1           `json:"paused,omitempty"`
+	Resumed         *ResumedV1          `json:"resumed,omitempty"`
+	Cancelled       *CancelledV1        `json:"cancelled,omitempty"`
+	Digest          CandidateDigestV1   `json:"digest,omitempty"`
 }

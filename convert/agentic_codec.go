@@ -15,6 +15,7 @@ import (
 
 	"github.com/cloudwego/eino/schema"
 	"github.com/cloudwego/eino/schema/claude"
+	"github.com/cloudwego/eino/schema/gemini"
 	"github.com/cloudwego/eino/schema/openai"
 	jsoncanonicalizer "github.com/cyberphone/json-canonicalization/go/src/webpki.org/jsoncanonicalizer"
 )
@@ -396,11 +397,13 @@ type toolInfoWire struct {
 	JSONSchema json.RawMessage                  `json:"json_schema"`
 }
 
-func projectToolDefinition(v *schema.ToolInfo) (PublicToolDefinition, error) {
+func projectToolDefinition(v *schema.ToolInfo, limits ProjectionLimits) (PublicToolDefinition, error) {
 	if v == nil {
 		return PublicToolDefinition{}, errors.New("tool definition is nil")
 	}
-	b, err := json.Marshal(v)
+	sanitized := *v
+	sanitized.Extra = nil
+	b, err := json.Marshal(&sanitized)
 	if err != nil {
 		return PublicToolDefinition{}, errors.New("cannot inspect tool parameters")
 	}
@@ -422,8 +425,15 @@ func projectToolDefinition(v *schema.ToolInfo) (PublicToolDefinition, error) {
 	}
 	out.ParamsKind = "params"
 	out.Params = make(map[string]*PublicParameterInfo, len(wire.Params))
+	entries := 0
 	for k, p := range wire.Params {
-		cloned, err := cloneParameter(p, map[*schema.ParameterInfo]bool{})
+		if k == "" {
+			return out, errors.New("parameter name is empty")
+		}
+		if err := addBoundedCount(&entries, 1, limits.MaxJSONEntries, "parameter entry limit exceeded"); err != nil {
+			return out, err
+		}
+		cloned, err := cloneParameter(p, 1, limits, &entries, map[*schema.ParameterInfo]bool{})
 		if err != nil {
 			return out, fmt.Errorf("parameter %s: %w", k, err)
 		}
@@ -432,19 +442,28 @@ func projectToolDefinition(v *schema.ToolInfo) (PublicToolDefinition, error) {
 	return out, nil
 }
 
-func cloneParameter(v *schema.ParameterInfo, stack map[*schema.ParameterInfo]bool) (*PublicParameterInfo, error) {
+func cloneParameter(v *schema.ParameterInfo, depth int, limits ProjectionLimits, entries *int, stack map[*schema.ParameterInfo]bool) (*PublicParameterInfo, error) {
 	if v == nil {
 		return nil, errors.New("is nil")
 	}
+	if depth > limits.MaxJSONDepth {
+		return nil, errors.New("depth limit exceeded")
+	}
 	if stack[v] {
 		return nil, errors.New("contains a cycle")
+	}
+	if err := addBoundedCount(entries, len(v.Enum), limits.MaxJSONEntries, "entry limit exceeded"); err != nil {
+		return nil, err
+	}
+	if err := addBoundedCount(entries, len(v.SubParams), limits.MaxJSONEntries, "entry limit exceeded"); err != nil {
+		return nil, err
 	}
 	stack[v] = true
 	defer delete(stack, v)
 	out := &PublicParameterInfo{Type: v.Type, Desc: v.Desc, Enum: append([]string(nil), v.Enum...), Required: v.Required}
 	var err error
 	if v.ElemInfo != nil {
-		out.ElemInfo, err = cloneParameter(v.ElemInfo, stack)
+		out.ElemInfo, err = cloneParameter(v.ElemInfo, depth+1, limits, entries, stack)
 		if err != nil {
 			return nil, err
 		}
@@ -452,13 +471,24 @@ func cloneParameter(v *schema.ParameterInfo, stack map[*schema.ParameterInfo]boo
 	if v.SubParams != nil {
 		out.SubParams = make(map[string]*PublicParameterInfo, len(v.SubParams))
 		for k, p := range v.SubParams {
-			out.SubParams[k], err = cloneParameter(p, stack)
+			if k == "" {
+				return nil, errors.New("nested parameter name is empty")
+			}
+			out.SubParams[k], err = cloneParameter(p, depth+1, limits, entries, stack)
 			if err != nil {
 				return nil, err
 			}
 		}
 	}
 	return out, nil
+}
+
+func addBoundedCount(total *int, next, limit int, message string) error {
+	if next < 0 || *total > limit-next {
+		return errors.New(message)
+	}
+	*total += next
+	return nil
 }
 
 func projectToolSearch(v *schema.ToolSearchFunctionToolResult, limits ProjectionLimits) (*PublicToolSearchResult, error) {
@@ -474,7 +504,7 @@ func projectToolSearch(v *schema.ToolSearchFunctionToolResult, limits Projection
 	out := &PublicToolSearchResult{CallID: v.CallID, Name: v.Name, Tools: make([]PublicToolDefinition, len(v.Result.Tools))}
 	seen := map[string]bool{}
 	for i, tool := range v.Result.Tools {
-		p, err := projectToolDefinition(tool)
+		p, err := projectToolDefinition(tool, limits)
 		if err != nil {
 			return nil, fmt.Errorf("tool %d: %w", i, err)
 		}
@@ -516,11 +546,12 @@ func projectMCPList(v *schema.MCPListToolsResult, limits ProjectionLimits) (*Pub
 
 func projectTextAnnotations(v *schema.AssistantGenText, limits ProjectionLimits) (*PublicProviderAnnotations, error) {
 	out := &PublicProviderAnnotations{}
+	annotationCount := 0
 	if v.OpenAIExtension != nil {
 		if v.OpenAIExtension.Refusal != nil {
 			out.RefusalReason = v.OpenAIExtension.Refusal.Reason
 		}
-		if len(v.OpenAIExtension.Annotations) > limits.MaxAnnotations {
+		if err := addBoundedCount(&annotationCount, len(v.OpenAIExtension.Annotations), limits.MaxAnnotations, "annotation limit exceeded"); err != nil {
 			return nil, errors.New("annotation limit exceeded")
 		}
 		for i, a := range v.OpenAIExtension.Annotations {
@@ -532,7 +563,7 @@ func projectTextAnnotations(v *schema.AssistantGenText, limits ProjectionLimits)
 		}
 	}
 	if v.ClaudeExtension != nil {
-		if len(v.ClaudeExtension.Citations) > limits.MaxAnnotations {
+		if err := addBoundedCount(&annotationCount, len(v.ClaudeExtension.Citations), limits.MaxAnnotations, "annotation limit exceeded"); err != nil {
 			return nil, errors.New("citation limit exceeded")
 		}
 		for i, c := range v.ClaudeExtension.Citations {
@@ -545,6 +576,9 @@ func projectTextAnnotations(v *schema.AssistantGenText, limits ProjectionLimits)
 	}
 	if out.RefusalReason == "" && len(out.OpenAI) == 0 && len(out.Claude) == 0 {
 		return nil, nil
+	}
+	if err := validatePublicProviderAnnotations(out, v.Text); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
@@ -681,53 +715,35 @@ func projectResponseMeta(v *schema.AgenticResponseMeta, blocks []PublicContentBl
 	if out.TokenUsage == nil && out.OpenAIStatus == "" && out.OpenAIError == nil && out.OpenAIIncompleteReason == "" && out.ClaudeStopReason == "" && out.ClaudeStopSequence == "" && out.ClaudeStopCategory == "" && out.ClaudeStopExplanation == "" && out.GeminiFinishReason == "" && out.GeminiGrounding == nil {
 		return nil, nil
 	}
+	if err := validatePublicResponseMeta(out); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
-func projectGemini(v interface { /* marker */
-}, blocks []PublicContentBlock, limits ProjectionLimits) (*PublicGeminiGrounding, error) {
-	// Avoid carrying Gemini's SDK blob by round-tripping only its documented fields.
-	b, err := json.Marshal(v)
-	if err != nil {
-		return nil, errors.New("cannot inspect grounding metadata")
+func projectGemini(v *gemini.GroundingMetadata, blocks []PublicContentBlock, limits ProjectionLimits) (*PublicGeminiGrounding, error) {
+	if v == nil {
+		return nil, nil
 	}
-	var wire struct {
-		GroundingChunks []struct {
-			Web *PublicGeminiGroundingChunk `json:"web"`
-		} `json:"grounding_chunks"`
-		GroundingSupports []struct {
-			ConfidenceScores      []float32 `json:"confidence_scores"`
-			GroundingChunkIndices []int     `json:"grounding_chunk_indices"`
-			Segment               *struct {
-				EndIndex   int    `json:"end_index"`
-				PartIndex  int    `json:"part_index"`
-				StartIndex int    `json:"start_index"`
-				Text       string `json:"text"`
-			} `json:"segment"`
-		} `json:"grounding_supports"`
-		SearchEntryPoint *struct {
-			RenderedContent string `json:"rendered_content"`
-		} `json:"search_entry_point"`
-		WebSearchQueries []string `json:"web_search_queries"`
-	}
-	if err := json.Unmarshal(b, &wire); err != nil {
-		return nil, errors.New("cannot inspect grounding metadata")
-	}
-	if len(wire.GroundingChunks)+len(wire.GroundingSupports) > limits.MaxAnnotations {
+	if len(v.GroundingChunks)+len(v.GroundingSupports) > limits.MaxAnnotations {
 		return nil, errors.New("grounding entry limit exceeded")
 	}
-	out := &PublicGeminiGrounding{WebSearchQueries: append([]string(nil), wire.WebSearchQueries...)}
-	if wire.SearchEntryPoint != nil {
-		out.RenderedSearchContent = wire.SearchEntryPoint.RenderedContent
+	entries := 0
+	if err := addBoundedCount(&entries, len(v.WebSearchQueries), limits.MaxJSONEntries, "grounding value entry limit exceeded"); err != nil {
+		return nil, err
 	}
-	for i, chunk := range wire.GroundingChunks {
-		if chunk.Web == nil {
+	out := &PublicGeminiGrounding{WebSearchQueries: append([]string(nil), v.WebSearchQueries...)}
+	if v.SearchEntryPoint != nil {
+		out.RenderedSearchContent = v.SearchEntryPoint.RenderedContent
+	}
+	for i, chunk := range v.GroundingChunks {
+		if chunk == nil || chunk.Web == nil {
 			return nil, fmt.Errorf("chunk %d has no web variant", i)
 		}
-		out.Chunks = append(out.Chunks, *chunk.Web)
+		out.Chunks = append(out.Chunks, PublicGeminiGroundingChunk{Domain: chunk.Web.Domain, Title: chunk.Web.Title, URI: chunk.Web.URI})
 	}
-	for i, support := range wire.GroundingSupports {
-		if support.Segment == nil {
+	for i, support := range v.GroundingSupports {
+		if support == nil || support.Segment == nil {
 			return nil, fmt.Errorf("support %d has no segment", i)
 		}
 		s := support.Segment
@@ -737,9 +753,23 @@ func projectGemini(v interface { /* marker */
 		if err := validateTextRange(*blocks[s.PartIndex].Text, s.StartIndex, s.EndIndex); err != nil {
 			return nil, fmt.Errorf("support %d: %w", i, err)
 		}
+		if s.Text != (*blocks[s.PartIndex].Text)[s.StartIndex:s.EndIndex] {
+			return nil, fmt.Errorf("support %d text does not match its target range", i)
+		}
+		if err := addBoundedCount(&entries, len(support.GroundingChunkIndices), limits.MaxJSONEntries, "grounding value entry limit exceeded"); err != nil {
+			return nil, err
+		}
+		if err := addBoundedCount(&entries, len(support.ConfidenceScores), limits.MaxJSONEntries, "grounding value entry limit exceeded"); err != nil {
+			return nil, err
+		}
 		for _, idx := range support.GroundingChunkIndices {
 			if idx < 0 || idx >= len(out.Chunks) {
 				return nil, fmt.Errorf("support %d has invalid chunk index", i)
+			}
+		}
+		for _, score := range support.ConfidenceScores {
+			if math.IsNaN(float64(score)) || math.IsInf(float64(score), 0) || score < 0 || score > 1 {
+				return nil, fmt.Errorf("support %d has invalid confidence score", i)
 			}
 		}
 		out.Supports = append(out.Supports, PublicGeminiGroundingSupport{ConfidenceScores: append([]float32(nil), support.ConfidenceScores...), GroundingChunkIndices: append([]int(nil), support.GroundingChunkIndices...), PartIndex: s.PartIndex, StartIndex: s.StartIndex, EndIndex: s.EndIndex, Text: s.Text})
@@ -832,9 +862,8 @@ func walkJSON(v reflect.Value, depth int, limits ProjectionLimits, entries *int,
 		}
 		stack[key] = true
 		defer delete(stack, key)
-		*entries += v.Len()
-		if *entries > limits.MaxJSONEntries {
-			return errors.New("JSON entry limit exceeded")
+		if err := addBoundedCount(entries, v.Len(), limits.MaxJSONEntries, "JSON entry limit exceeded"); err != nil {
+			return err
 		}
 		iter := v.MapRange()
 		for iter.Next() {
@@ -855,9 +884,8 @@ func walkJSON(v reflect.Value, depth int, limits ProjectionLimits, entries *int,
 		defer delete(stack, key)
 		fallthrough
 	case reflect.Array:
-		*entries += v.Len()
-		if *entries > limits.MaxJSONEntries {
-			return errors.New("JSON entry limit exceeded")
+		if err := addBoundedCount(entries, v.Len(), limits.MaxJSONEntries, "JSON entry limit exceeded"); err != nil {
+			return err
 		}
 		for i := 0; i < v.Len(); i++ {
 			if err := walkJSON(v.Index(i), depth+1, limits, entries, stack); err != nil {
@@ -963,7 +991,7 @@ func validateEnvelope(value *AgenticEnvelopeV1, verifyDigest bool) error {
 	if err := validateIdentity(value.Identity, DefaultProjectionLimits().MaxAgentPathSegments, value.Kind == EnvelopeContentBlock); err != nil {
 		return fmt.Errorf("agentic envelope identity: %w", err)
 	}
-	selected := boolCount(value.ContentBlock != nil, value.ProviderAnnotations != nil, value.Lifecycle != nil, value.AttemptReplaced != nil, value.Paused != nil, value.Resumed != nil, value.Cancelled != nil)
+	selected := boolCount(value.ContentBlock != nil, value.ResponseMeta != nil, value.Lifecycle != nil, value.AttemptReplaced != nil, value.Paused != nil, value.Resumed != nil, value.Cancelled != nil)
 	if selected != 1 {
 		return errors.New("agentic envelope must contain exactly one payload")
 	}
@@ -971,8 +999,8 @@ func validateEnvelope(value *AgenticEnvelopeV1, verifyDigest bool) error {
 	switch value.Kind {
 	case EnvelopeContentBlock:
 		valid = value.ContentBlock != nil
-	case EnvelopeProviderAnnotations:
-		valid = value.ProviderAnnotations != nil
+	case EnvelopeResponseMeta:
+		valid = value.ResponseMeta != nil
 	case EnvelopeAttemptReplaced:
 		valid = value.AttemptReplaced != nil
 	case EnvelopePaused:
@@ -995,6 +1023,11 @@ func validateEnvelope(value *AgenticEnvelopeV1, verifyDigest bool) error {
 			return fmt.Errorf("agentic envelope content block: %w", err)
 		}
 	}
+	if value.ResponseMeta != nil {
+		if err := validatePublicResponseMeta(value.ResponseMeta); err != nil {
+			return fmt.Errorf("agentic envelope response metadata: %w", err)
+		}
+	}
 	if value.AttemptReplaced != nil {
 		if value.AttemptReplaced.OldAttemptID == "" || value.AttemptReplaced.NewAttemptID == "" || value.AttemptReplaced.OldAttemptID == value.AttemptReplaced.NewAttemptID {
 			return errors.New("attempt replacement requires distinct old and new attempt IDs")
@@ -1002,8 +1035,14 @@ func validateEnvelope(value *AgenticEnvelopeV1, verifyDigest bool) error {
 		if value.AttemptReplaced.Cause == "" || value.AttemptReplaced.Semantics == "" {
 			return errors.New("attempt replacement requires cause and semantics")
 		}
+		if value.Identity.AttemptID != value.AttemptReplaced.OldAttemptID {
+			return errors.New("attempt replacement identity must name the old attempt")
+		}
 	}
 	if value.Paused != nil {
+		if value.Paused.PauseID == "" {
+			return errors.New("pause ID is required")
+		}
 		if err := validateInterruptTargets(value.Paused.Targets); err != nil {
 			return err
 		}
@@ -1020,6 +1059,9 @@ func validateEnvelope(value *AgenticEnvelopeV1, verifyDigest bool) error {
 		}
 		if err := validateCorrelation(value.Resumed.Correlation, value.Resumed.Targets); err != nil {
 			return err
+		}
+		if value.Resumed.NewTurnID == value.Identity.TurnID || value.Resumed.NewAttemptID == value.Identity.AttemptID {
+			return errors.New("resume requires new turn and attempt IDs")
 		}
 	}
 	if value.Cancelled != nil && (value.Cancelled.RequestedMode == "" || value.Cancelled.ObservedMode == "" || value.Cancelled.Classification == "") {
@@ -1123,11 +1165,13 @@ func validatePublicContentBlock(block *PublicContentBlock) error {
 			return errors.New("MCP tool definition limit exceeded")
 		}
 	}
-	if annotations := block.ProviderAnnotations; annotations != nil && len(annotations.OpenAI)+len(annotations.Claude) > limits.MaxAnnotations {
-		return errors.New("provider annotation limit exceeded")
-	}
 	if block.ProviderAnnotations != nil && block.Type != schema.ContentBlockTypeAssistantGenText {
 		return errors.New("provider annotations require assistant generated text")
+	}
+	if block.ProviderAnnotations != nil {
+		if err := validatePublicProviderAnnotations(block.ProviderAnnotations, derefString(block.Text)); err != nil {
+			return err
+		}
 	}
 	wantCallID := publicBlockCallID(block)
 	if wantCallID == "" {
@@ -1136,6 +1180,114 @@ func validatePublicContentBlock(block *PublicContentBlock) error {
 		}
 	} else if block.Identity.CallID != wantCallID {
 		return errors.New("content call ID does not match identity")
+	}
+	return nil
+}
+
+func validatePublicProviderAnnotations(annotations *PublicProviderAnnotations, text string) error {
+	if annotations == nil {
+		return nil
+	}
+	limits := DefaultProjectionLimits()
+	if len(annotations.OpenAI)+len(annotations.Claude) > limits.MaxAnnotations {
+		return errors.New("provider annotation limit exceeded")
+	}
+	for i, annotation := range annotations.OpenAI {
+		var err error
+		switch openai.TextAnnotationType(annotation.Type) {
+		case openai.TextAnnotationTypeFileCitation:
+			if annotation.FileID == "" || annotation.Index < 0 || annotation.URL != "" || annotation.ContainerID != "" || annotation.StartIndex != 0 || annotation.EndIndex != 0 {
+				err = errors.New("invalid file citation")
+			}
+		case openai.TextAnnotationTypeURLCitation:
+			if annotation.URL == "" || annotation.FileID != "" || annotation.ContainerID != "" || annotation.Index != 0 {
+				err = errors.New("invalid URL citation")
+			} else {
+				err = validateTextRange(text, annotation.StartIndex, annotation.EndIndex)
+			}
+		case openai.TextAnnotationTypeContainerFileCitation:
+			if annotation.ContainerID == "" || annotation.FileID == "" || annotation.URL != "" || annotation.Index != 0 {
+				err = errors.New("invalid container file citation")
+			} else {
+				err = validateTextRange(text, annotation.StartIndex, annotation.EndIndex)
+			}
+		case openai.TextAnnotationTypeFilePath:
+			if annotation.FileID == "" || annotation.Index < 0 || annotation.URL != "" || annotation.ContainerID != "" || annotation.StartIndex != 0 || annotation.EndIndex != 0 {
+				err = errors.New("invalid file path annotation")
+			}
+		default:
+			err = errors.New("unknown OpenAI annotation type")
+		}
+		if err != nil {
+			return fmt.Errorf("OpenAI annotation %d: %w", i, err)
+		}
+	}
+	for i, citation := range annotations.Claude {
+		var err error
+		switch claude.TextCitationType(citation.Type) {
+		case claude.TextCitationTypeCharLocation, claude.TextCitationTypePageLocation, claude.TextCitationTypeContentBlockLocation:
+			if citation.DocumentIndex < 0 || citation.StartIndex < 0 || citation.EndIndex < citation.StartIndex || citation.URL != "" {
+				err = errors.New("invalid source citation")
+			}
+		case claude.TextCitationTypeWebSearchResultLocation:
+			if citation.URL == "" || citation.DocumentTitle != "" || citation.DocumentIndex != 0 || citation.StartIndex != 0 || citation.EndIndex != 0 {
+				err = errors.New("invalid web citation")
+			}
+		default:
+			err = errors.New("unknown Claude citation type")
+		}
+		if err != nil {
+			return fmt.Errorf("claude citation %d: %w", i, err)
+		}
+	}
+	if annotations.RefusalReason == "" && len(annotations.OpenAI) == 0 && len(annotations.Claude) == 0 {
+		return errors.New("provider annotations have no public fields")
+	}
+	return nil
+}
+
+func validatePublicResponseMeta(meta *PublicResponseMeta) error {
+	if meta == nil {
+		return errors.New("response metadata is required")
+	}
+	if meta.TokenUsage != nil {
+		if err := meta.TokenUsage.Validate(); err != nil {
+			return err
+		}
+	}
+	if grounding := meta.GeminiGrounding; grounding != nil {
+		limits := DefaultProjectionLimits()
+		if len(grounding.Chunks)+len(grounding.Supports) > limits.MaxAnnotations {
+			return errors.New("grounding entry limit exceeded")
+		}
+		entries := 0
+		if err := addBoundedCount(&entries, len(grounding.WebSearchQueries), limits.MaxJSONEntries, "grounding value entry limit exceeded"); err != nil {
+			return err
+		}
+		for i, support := range grounding.Supports {
+			if support.PartIndex < 0 || support.StartIndex < 0 || support.EndIndex < support.StartIndex {
+				return fmt.Errorf("grounding support %d has invalid target range", i)
+			}
+			if err := addBoundedCount(&entries, len(support.GroundingChunkIndices), limits.MaxJSONEntries, "grounding value entry limit exceeded"); err != nil {
+				return err
+			}
+			if err := addBoundedCount(&entries, len(support.ConfidenceScores), limits.MaxJSONEntries, "grounding value entry limit exceeded"); err != nil {
+				return err
+			}
+			for _, index := range support.GroundingChunkIndices {
+				if index < 0 || index >= len(grounding.Chunks) {
+					return fmt.Errorf("grounding support %d has invalid chunk index", i)
+				}
+			}
+			for _, score := range support.ConfidenceScores {
+				if math.IsNaN(float64(score)) || math.IsInf(float64(score), 0) || score < 0 || score > 1 {
+					return fmt.Errorf("grounding support %d has invalid confidence score", i)
+				}
+			}
+		}
+	}
+	if meta.TokenUsage == nil && meta.OpenAIStatus == "" && meta.OpenAIError == nil && meta.OpenAIIncompleteReason == "" && meta.ClaudeStopReason == "" && meta.ClaudeStopSequence == "" && meta.ClaudeStopCategory == "" && meta.ClaudeStopExplanation == "" && meta.GeminiFinishReason == "" && meta.GeminiGrounding == nil {
+		return errors.New("response metadata has no public fields")
 	}
 	return nil
 }
@@ -1153,14 +1305,15 @@ func validatePublicToolDefinition(tool *PublicToolDefinition, limits ProjectionL
 		if tool.Params == nil || len(tool.JSONSchema) != 0 {
 			return errors.New("structured parameters are invalid")
 		}
-		if len(tool.Params) > limits.MaxJSONEntries {
+		entries := 0
+		if err := addBoundedCount(&entries, len(tool.Params), limits.MaxJSONEntries, "structured parameter limit exceeded"); err != nil {
 			return errors.New("structured parameter limit exceeded")
 		}
 		for name, parameter := range tool.Params {
 			if name == "" || parameter == nil {
 				return errors.New("structured parameter names and values are required")
 			}
-			if err := validatePublicParameter(parameter, 1, limits); err != nil {
+			if err := validatePublicParameter(parameter, 1, limits, &entries, map[*PublicParameterInfo]bool{}); err != nil {
 				return fmt.Errorf("parameter %s: %w", name, err)
 			}
 		}
@@ -1174,15 +1327,26 @@ func validatePublicToolDefinition(tool *PublicToolDefinition, limits ProjectionL
 	return nil
 }
 
-func validatePublicParameter(parameter *PublicParameterInfo, depth int, limits ProjectionLimits) error {
+func validatePublicParameter(parameter *PublicParameterInfo, depth int, limits ProjectionLimits, entries *int, stack map[*PublicParameterInfo]bool) error {
+	if parameter == nil {
+		return errors.New("parameter is nil")
+	}
 	if depth > limits.MaxJSONDepth {
 		return errors.New("parameter depth limit exceeded")
 	}
-	if len(parameter.SubParams) > limits.MaxJSONEntries || len(parameter.Enum) > limits.MaxJSONEntries {
+	if stack[parameter] {
+		return errors.New("parameter contains a cycle")
+	}
+	if err := addBoundedCount(entries, len(parameter.SubParams), limits.MaxJSONEntries, "parameter entry limit exceeded"); err != nil {
+		return err
+	}
+	if err := addBoundedCount(entries, len(parameter.Enum), limits.MaxJSONEntries, "parameter entry limit exceeded"); err != nil {
 		return errors.New("parameter entry limit exceeded")
 	}
+	stack[parameter] = true
+	defer delete(stack, parameter)
 	if parameter.ElemInfo != nil {
-		if err := validatePublicParameter(parameter.ElemInfo, depth+1, limits); err != nil {
+		if err := validatePublicParameter(parameter.ElemInfo, depth+1, limits, entries, stack); err != nil {
 			return err
 		}
 	}
@@ -1190,7 +1354,7 @@ func validatePublicParameter(parameter *PublicParameterInfo, depth int, limits P
 		if name == "" || child == nil {
 			return errors.New("nested parameter names and values are required")
 		}
-		if err := validatePublicParameter(child, depth+1, limits); err != nil {
+		if err := validatePublicParameter(child, depth+1, limits, entries, stack); err != nil {
 			return err
 		}
 	}

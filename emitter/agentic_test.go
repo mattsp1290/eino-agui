@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -15,6 +18,11 @@ import (
 	"github.com/mattsp1290/eino-agui/internal/golden"
 	"github.com/mattsp1290/eino-agui/internal/testsse"
 )
+
+var _ interface {
+	Emit(events.Event) error
+	Detach(error)
+} = (*ObserverSink)(nil)
 
 func agenticProjection(t *testing.T) *convert.AgenticProjection {
 	return agenticProjectionForAttempt(t, "attempt")
@@ -87,8 +95,14 @@ func TestAgenticSSEPassesPinnedStrictDecoder(t *testing.T) {
 	if err := sink.Flush(); err != nil {
 		t.Fatal(err)
 	}
+	strictDecodeAgenticSSE(t, sink.Bytes())
+}
+
+func strictDecodeAgenticSSE(t *testing.T, data []byte) []events.Event {
+	t.Helper()
 	decoder := events.NewEventDecoder(nil)
-	for _, frame := range bytes.Split(sink.Bytes(), []byte("\n\n")) {
+	var decodedEvents []events.Event
+	for _, frame := range bytes.Split(data, []byte("\n\n")) {
 		if len(bytes.TrimSpace(frame)) == 0 {
 			continue
 		}
@@ -118,6 +132,7 @@ func TestAgenticSSEPassesPinnedStrictDecoder(t *testing.T) {
 		if err := decoded.Validate(); err != nil {
 			t.Fatalf("strict validate %s: %v", eventType, err)
 		}
+		decodedEvents = append(decodedEvents, decoded)
 		if eventType == "CUSTOM" {
 			custom := decoded.(*events.CustomEvent)
 			encoded, err := json.Marshal(custom.Value)
@@ -128,6 +143,96 @@ func TestAgenticSSEPassesPinnedStrictDecoder(t *testing.T) {
 				t.Fatalf("agentic decode: %v", err)
 			}
 		}
+	}
+	return decodedEvents
+}
+
+func TestAllAgenticContentKindsPassPinnedWireDecoders(t *testing.T) {
+	t.Parallel()
+	code := int64(7)
+	resultParts := []*schema.FunctionToolResultContentBlock{
+		{Type: schema.FunctionToolResultContentBlockTypeText, Text: &schema.UserInputText{Text: "text"}},
+		{Type: schema.FunctionToolResultContentBlockTypeImage, Image: &schema.UserInputImage{URL: "https://example.test/image"}},
+		{Type: schema.FunctionToolResultContentBlockTypeAudio, Audio: &schema.UserInputAudio{URL: "https://example.test/audio"}},
+		{Type: schema.FunctionToolResultContentBlockTypeVideo, Video: &schema.UserInputVideo{URL: "https://example.test/video"}},
+		{Type: schema.FunctionToolResultContentBlockTypeFile, File: &schema.UserInputFile{URL: "https://example.test/file", Name: "file.pdf"}},
+	}
+	tests := []struct {
+		name    string
+		role    schema.AgenticRoleType
+		block   *schema.ContentBlock
+		context convert.AgenticBlockContext
+	}{
+		{"reasoning", schema.AgenticRoleTypeAssistant, schema.NewContentBlock(&schema.Reasoning{Text: "why"}), convert.AgenticBlockContext{BlockID: "block"}},
+		{"user text", schema.AgenticRoleTypeUser, schema.NewContentBlock(&schema.UserInputText{Text: "hello"}), convert.AgenticBlockContext{BlockID: "block"}},
+		{"user image", schema.AgenticRoleTypeUser, schema.NewContentBlock(&schema.UserInputImage{URL: "https://example.test/image"}), convert.AgenticBlockContext{BlockID: "block"}},
+		{"user audio", schema.AgenticRoleTypeUser, schema.NewContentBlock(&schema.UserInputAudio{Base64Data: "YWJj", MIMEType: "audio/wav"}), convert.AgenticBlockContext{BlockID: "block"}},
+		{"user video", schema.AgenticRoleTypeUser, schema.NewContentBlock(&schema.UserInputVideo{URL: "https://example.test/video"}), convert.AgenticBlockContext{BlockID: "block"}},
+		{"user file", schema.AgenticRoleTypeUser, schema.NewContentBlock(&schema.UserInputFile{URL: "https://example.test/file", Name: "file.pdf"}), convert.AgenticBlockContext{BlockID: "block"}},
+		{"tool search", schema.AgenticRoleTypeUser, schema.NewContentBlock(&schema.ToolSearchFunctionToolResult{CallID: "search", Name: "search", Result: &schema.ToolSearchResult{Tools: []*schema.ToolInfo{{Name: "lookup"}}}}), convert.AgenticBlockContext{BlockID: "block"}},
+		{"assistant text", schema.AgenticRoleTypeAssistant, schema.NewContentBlock(&schema.AssistantGenText{Text: "answer"}), convert.AgenticBlockContext{BlockID: "block"}},
+		{"assistant image", schema.AgenticRoleTypeAssistant, schema.NewContentBlock(&schema.AssistantGenImage{URL: "https://example.test/generated-image"}), convert.AgenticBlockContext{BlockID: "block"}},
+		{"assistant audio", schema.AgenticRoleTypeAssistant, schema.NewContentBlock(&schema.AssistantGenAudio{URL: "https://example.test/generated-audio"}), convert.AgenticBlockContext{BlockID: "block"}},
+		{"assistant video", schema.AgenticRoleTypeAssistant, schema.NewContentBlock(&schema.AssistantGenVideo{URL: "https://example.test/generated-video"}), convert.AgenticBlockContext{BlockID: "block"}},
+		{"function call", schema.AgenticRoleTypeAssistant, schema.NewContentBlock(&schema.FunctionToolCall{CallID: "function", Name: "lookup", Arguments: `{}`}), convert.AgenticBlockContext{BlockID: "block"}},
+		{"function result", schema.AgenticRoleTypeUser, schema.NewContentBlock(&schema.FunctionToolResult{CallID: "function", Name: "lookup", Content: resultParts}), convert.AgenticBlockContext{BlockID: "block"}},
+		{"server call", schema.AgenticRoleTypeAssistant, schema.NewContentBlock(&schema.ServerToolCall{CallID: "server", Name: "search", Arguments: map[string]any{"q": "go"}}), convert.AgenticBlockContext{BlockID: "block", ProviderServerID: "provider"}},
+		{"server result", schema.AgenticRoleTypeAssistant, schema.NewContentBlock(&schema.ServerToolResult{CallID: "server", Name: "search", Content: []any{"result"}}), convert.AgenticBlockContext{BlockID: "block", ProviderServerID: "provider"}},
+		{"MCP call", schema.AgenticRoleTypeAssistant, schema.NewContentBlock(&schema.MCPToolCall{ServerLabel: "server", CallID: "mcp", Name: "lookup", Arguments: `{}`}), convert.AgenticBlockContext{BlockID: "block"}},
+		{"MCP result", schema.AgenticRoleTypeAssistant, schema.NewContentBlock(&schema.MCPToolResult{ServerLabel: "server", CallID: "mcp", Name: "lookup", Content: `{}`, Error: &schema.MCPToolCallError{Code: &code, Message: "failed"}}), convert.AgenticBlockContext{BlockID: "block"}},
+		{"MCP list", schema.AgenticRoleTypeAssistant, schema.NewContentBlock(&schema.MCPListToolsResult{ServerLabel: "server", Tools: []*schema.MCPListToolsItem{{Name: "lookup"}}}), convert.AgenticBlockContext{BlockID: "block"}},
+		{"MCP approval request", schema.AgenticRoleTypeAssistant, schema.NewContentBlock(&schema.MCPToolApprovalRequest{ID: "approval", ServerLabel: "server", Name: "lookup", Arguments: `{}`}), convert.AgenticBlockContext{BlockID: "block"}},
+		{"MCP approval response", schema.AgenticRoleTypeUser, schema.NewContentBlock(&schema.MCPToolApprovalResponse{ApprovalRequestID: "approval", Approve: true}), convert.AgenticBlockContext{BlockID: "block", ExpectedApprovalRequestID: "approval"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			id := agenticProjection(t).Public.Identity
+			projection, err := convert.ToAgenticProjection(&schema.AgenticMessage{Role: tc.role, ContentBlocks: []*schema.ContentBlock{tc.block}}, convert.AgenticProjectionContext{Identity: id, Blocks: []convert.AgenticBlockContext{tc.context}, Limits: convert.DefaultProjectionLimits()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			receipt := convert.CommitReceiptV1{Revision: "revision", Domain: "projection", Identity: projection.Public.Identity, Digest: projection.Digest}
+			sink := testsse.NewSink()
+			emit := NewObserverEmitter(t.Context(), sink.Writer(), sink.SSEWriter())
+			if !emit.EmitCommittedProjection(projection, receipt, DeliveryModeReplay) {
+				t.Fatalf("emit failed: %v / %v", emit.Err(), emit.EncErr())
+			}
+			if err := sink.Flush(); err != nil {
+				t.Fatal(err)
+			}
+			decoded := strictDecodeAgenticSSE(t, sink.Bytes())
+			custom := 0
+			for _, event := range decoded {
+				if event.GetBaseEvent().Type() == events.EventTypeCustom {
+					custom++
+				}
+			}
+			if custom != 1 {
+				t.Fatalf("custom event count = %d, want 1", custom)
+			}
+		})
+	}
+}
+
+func TestObserverSinkAdaptsObserverEmitterAndDetaches(t *testing.T) {
+	t.Parallel()
+	sink := testsse.NewSink()
+	emit := NewObserverEmitter(t.Context(), sink.Writer(), sink.SSEWriter())
+	observer := NewObserverSink(emit)
+	messageID, role, delta := "message", "assistant", "hello"
+	if err := observer.Emit(events.NewTextMessageChunkEvent(&messageID, &role, &delta)); err != nil {
+		t.Fatal(err)
+	}
+	detachErr := errors.New("observer disconnected")
+	observer.Detach(detachErr)
+	if !errors.Is(observer.Err(), detachErr) {
+		t.Fatalf("observer error = %v", observer.Err())
+	}
+	if err := observer.Emit(events.NewTextMessageChunkEvent(&messageID, &role, &delta)); !errors.Is(err, detachErr) {
+		t.Fatalf("detached emit error = %v", err)
+	}
+	if got := golden.FrameTypes(normalizedFrames(t, sink)); !reflect.DeepEqual(got, []string{"TEXT_MESSAGE_CHUNK"}) {
+		t.Fatalf("types = %v", got)
 	}
 }
 
@@ -164,6 +269,90 @@ func TestEmitCommittedProjectionModes(t *testing.T) {
 	}
 }
 
+func TestCommittedProjectionEmitsResponseMetadata(t *testing.T) {
+	t.Parallel()
+	id := agenticProjection(t).Public.Identity
+	projection, err := convert.ToAgenticProjection(
+		&schema.AgenticMessage{
+			Role:          schema.AgenticRoleTypeAssistant,
+			ContentBlocks: []*schema.ContentBlock{schema.NewContentBlock(&schema.AssistantGenText{Text: "answer"})},
+			ResponseMeta:  &schema.AgenticResponseMeta{TokenUsage: &schema.TokenUsage{PromptTokens: 3, CompletionTokens: 2, TotalTokens: 5}},
+		},
+		convert.AgenticProjectionContext{Identity: id, Blocks: []convert.AgenticBlockContext{{BlockID: "text"}}, Limits: convert.DefaultProjectionLimits()},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := convert.CommitReceiptV1{Revision: "revision", Domain: "projection", Identity: projection.Public.Identity, Digest: projection.Digest}
+	sink := testsse.NewSink()
+	emit := NewObserverEmitter(t.Context(), sink.Writer(), sink.SSEWriter())
+	if !emit.EmitCommittedProjection(projection, receipt, DeliveryModeLiveContinuation) {
+		t.Fatalf("emit failed: %v / %v", emit.Err(), emit.EncErr())
+	}
+	frames := normalizedFrames(t, sink)
+	if got := golden.FrameTypes(frames); !reflect.DeepEqual(got, []string{"CUSTOM", "CUSTOM"}) {
+		t.Fatalf("types = %v", got)
+	}
+	envelope, err := convert.DecodeAgenticEnvelope(frames[1].Data["value"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Kind != convert.EnvelopeResponseMeta || envelope.ResponseMeta == nil || envelope.ResponseMeta.TokenUsage == nil || *envelope.ResponseMeta.TokenUsage.TotalTokens != 5 {
+		t.Fatalf("response metadata envelope = %#v", envelope)
+	}
+}
+
+func TestAgenticStreamMatchesNormalizedGoldenFixture(t *testing.T) {
+	t.Parallel()
+	id := convert.AgenticIdentityV1{SessionID: "session-golden", ThreadID: "session-golden", RunID: "run-golden", TurnID: "turn-golden", MessageID: "message-golden", AttemptID: "attempt-golden", AgentPath: []convert.AgentPathSegment{{Name: "root", RunID: "run-golden"}}}
+	projection, err := convert.ToAgenticProjection(
+		&schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{schema.NewContentBlock(&schema.AssistantGenText{Text: "hello"})}, ResponseMeta: &schema.AgenticResponseMeta{TokenUsage: &schema.TokenUsage{PromptTokens: 2, CompletionTokens: 1, TotalTokens: 3}}},
+		convert.AgenticProjectionContext{Identity: id, Blocks: []convert.AgenticBlockContext{{BlockID: "block-golden"}}, Limits: convert.DefaultProjectionLimits()},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := testsse.NewSink()
+	emit := NewObserverEmitter(t.Context(), sink.Writer(), sink.SSEWriter())
+	transient, err := convert.TransientEventForBlock(projection.Blocks[0].Public)
+	if err != nil || !emit.EmitTransientBlock(transient) {
+		t.Fatalf("transient: %v / %v", err, emit.EncErr())
+	}
+	projectionReceipt := convert.CommitReceiptV1{Revision: "revision-golden", Domain: "projection", Identity: id, Digest: projection.Digest}
+	if !emit.EmitCommittedProjection(projection, projectionReceipt, DeliveryModeLiveContinuation) {
+		t.Fatalf("projection: %v / %v", emit.Err(), emit.EncErr())
+	}
+	targets := []convert.InterruptTargetV1{{ID: "interrupt-golden", Address: "agent:root;node:approval"}}
+	pause := convert.PausedV1{PauseID: "pause-golden", Targets: targets}
+	pauseEnvelope := &convert.AgenticEnvelopeV1{Version: 1, Kind: convert.EnvelopePaused, Identity: id, Paused: &pause}
+	pauseDigest, err := convert.LifecycleDigestV1(pauseEnvelope)
+	if err != nil || !emit.Paused(pause, convert.CommitReceiptV1{Revision: "pause-revision", Domain: "lifecycle", Kind: convert.EnvelopePaused, Identity: id, Digest: pauseDigest}) {
+		t.Fatalf("pause: %v / %v", err, emit.EncErr())
+	}
+	resume := convert.ResumedV1{PauseID: "pause-golden", Targets: targets, Full: true, NewTurnID: "turn-resumed", NewAttemptID: "attempt-resumed"}
+	resumeEnvelope := &convert.AgenticEnvelopeV1{Version: 1, Kind: convert.EnvelopeResumed, Identity: id, Resumed: &resume}
+	resumeDigest, err := convert.LifecycleDigestV1(resumeEnvelope)
+	if err != nil || !emit.Resumed(resume, convert.CommitReceiptV1{Revision: "resume-revision", Domain: "lifecycle", Kind: convert.EnvelopeResumed, Identity: id, Digest: resumeDigest}) {
+		t.Fatalf("resume: %v / %v", err, emit.EncErr())
+	}
+	got := normalizedFrames(t, sink)
+	content, err := os.ReadFile(filepath.Join("..", "testdata", "golden", "agentic_stream.normalized.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Frames []golden.Frame `json:"frames"`
+	}
+	if err := json.Unmarshal(content, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, fixture.Frames) {
+		gotJSON, _ := json.MarshalIndent(got, "", "  ")
+		wantJSON, _ := json.MarshalIndent(fixture.Frames, "", "  ")
+		t.Fatalf("agentic stream golden mismatch\ngot: %s\nwant: %s", gotJSON, wantJSON)
+	}
+}
+
 func TestEmitTransientBlockUsesChunkAndDoesNotAuthorizeCommit(t *testing.T) {
 	t.Parallel()
 	projection := agenticProjection(t)
@@ -188,15 +377,78 @@ func TestEmitTransientBlockUsesChunkAndDoesNotAuthorizeCommit(t *testing.T) {
 
 func TestCommittedProjectionRejectsMismatchedReceiptWithoutBytes(t *testing.T) {
 	t.Parallel()
-	projection := agenticProjection(t)
-	sink := testsse.NewSink()
-	emit := NewObserverEmitter(context.Background(), sink.Writer(), sink.SSEWriter())
-	receipt := convert.CommitReceiptV1{Revision: "rev-1", Domain: "projection", Identity: projection.Public.Identity, Digest: "wrong"}
-	if emit.EmitCommittedProjection(projection, receipt, DeliveryModeReplay) {
-		t.Fatal("mismatched receipt emitted")
+	complete := agenticProjection(t)
+	toolResult, err := convert.ToAgenticProjection(
+		&schema.AgenticMessage{Role: schema.AgenticRoleTypeUser, ContentBlocks: []*schema.ContentBlock{schema.NewContentBlock(&schema.FunctionToolResult{
+			CallID: "call", Name: "lookup", Content: []*schema.FunctionToolResultContentBlock{{Type: schema.FunctionToolResultContentBlockTypeText, Text: &schema.UserInputText{Text: "result"}}},
+		})}},
+		convert.AgenticProjectionContext{Identity: complete.Public.Identity, Blocks: []convert.AgenticBlockContext{{BlockID: "result"}}, Limits: convert.DefaultProjectionLimits()},
+	)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := normalizedFrames(t, sink); len(got) != 0 {
-		t.Fatalf("frames = %#v, want none", got)
+	for _, tc := range []struct {
+		name       string
+		projection *convert.AgenticProjection
+	}{{"complete message", complete}, {"tool result", toolResult}} {
+		t.Run(tc.name, func(t *testing.T) {
+			sink := testsse.NewSink()
+			emit := NewObserverEmitter(context.Background(), sink.Writer(), sink.SSEWriter())
+			receipt := convert.CommitReceiptV1{Revision: "rev-1", Domain: "projection", Identity: tc.projection.Public.Identity, Digest: "wrong"}
+			if emit.EmitCommittedProjection(tc.projection, receipt, DeliveryModeReplay) {
+				t.Fatal("mismatched receipt emitted")
+			}
+			if got := normalizedFrames(t, sink); len(got) != 0 {
+				t.Fatalf("frames = %#v, want none", got)
+			}
+		})
+	}
+}
+
+func TestCommittedReceiptIsConsumedOncePerEmitter(t *testing.T) {
+	t.Parallel()
+	projection := agenticProjection(t)
+	receipt := convert.CommitReceiptV1{Revision: "revision", Domain: "projection", Identity: projection.Public.Identity, Digest: projection.Digest}
+	sink := testsse.NewSink()
+	emit := NewObserverEmitter(t.Context(), sink.Writer(), sink.SSEWriter())
+	if !emit.EmitCommittedProjection(projection, receipt, DeliveryModeReplay) {
+		t.Fatalf("first emit failed: %v / %v", emit.Err(), emit.EncErr())
+	}
+	first := len(normalizedFrames(t, sink))
+	if emit.EmitCommittedProjection(projection, receipt, DeliveryModeReplay) {
+		t.Fatal("replayed receipt emitted twice")
+	}
+	if got := len(normalizedFrames(t, sink)); got != first {
+		t.Fatalf("receipt replay wrote %d frames, want %d", got, first)
+	}
+
+	freshSink := testsse.NewSink()
+	fresh := NewObserverEmitter(t.Context(), freshSink.Writer(), freshSink.SSEWriter())
+	if !fresh.EmitCommittedProjection(projection, receipt, DeliveryModeReplay) {
+		t.Fatalf("fresh replay failed: %v / %v", fresh.Err(), fresh.EncErr())
+	}
+}
+
+func TestAgenticStateKeysCannotCollideAtEmbeddedDelimiters(t *testing.T) {
+	t.Parallel()
+	left := agenticProjection(t).Public.Identity
+	right := left
+	left.SessionID = "a\x00b"
+	left.ThreadID = left.SessionID
+	left.RunID = "c"
+	right.SessionID = "a"
+	right.ThreadID = right.SessionID
+	right.RunID = "b\x00c"
+	if agenticMessageKey(left) == agenticMessageKey(right) {
+		t.Fatal("distinct message identities produced the same state key")
+	}
+	if agenticPauseKey(left, "pause") == agenticPauseKey(right, "pause") {
+		t.Fatal("distinct pause identities produced the same state key")
+	}
+	leftReceipt := convert.CommitReceiptV1{Revision: "rev\x00projection", Domain: "domain", Identity: left, Digest: "digest"}
+	rightReceipt := convert.CommitReceiptV1{Revision: "rev", Domain: "projection\x00domain", Identity: left, Digest: "digest"}
+	if agenticReceiptKey(leftReceipt) == agenticReceiptKey(rightReceipt) {
+		t.Fatal("distinct receipts produced the same state key")
 	}
 }
 
@@ -210,7 +462,7 @@ func TestCommittedLifecycleRejectsFailedCommitWithoutBytes(t *testing.T) {
 		call func(*Emitter) bool
 	}{
 		{"pause", func(e *Emitter) bool {
-			return e.Paused(convert.PausedV1{Targets: []convert.InterruptTargetV1{{ID: "interrupt", Address: "agent:root"}}}, convert.CommitReceiptV1{Revision: "failed", Domain: "lifecycle", Kind: convert.EnvelopePaused, Identity: root, Digest: "not-committed"})
+			return e.Paused(convert.PausedV1{PauseID: "pause", Targets: []convert.InterruptTargetV1{{ID: "interrupt", Address: "agent:root"}}}, convert.CommitReceiptV1{Revision: "failed", Domain: "lifecycle", Kind: convert.EnvelopePaused, Identity: root, Digest: "not-committed"})
 		}},
 		{"cancellation", func(e *Emitter) bool {
 			return e.Cancelled(convert.CancelledV1{RequestedMode: "immediate", ObservedMode: "immediate", Classification: "immediate"}, convert.CommitReceiptV1{Revision: "failed", Domain: "lifecycle", Kind: convert.EnvelopeCancelled, Identity: root, Digest: "not-committed"})
@@ -269,6 +521,73 @@ func TestTurnFinishedIsCustomOnlyAndRunTerminalRequiresSettlement(t *testing.T) 
 	}
 }
 
+func TestCommittedPauseResumeOrderingAndTargets(t *testing.T) {
+	t.Parallel()
+	id := agenticProjection(t).Public.Identity
+	targets := []convert.InterruptTargetV1{
+		{ID: "one", Address: "agent:root;node:one"},
+		{ID: "two", Address: "agent:root;node:two"},
+		{ID: "three", Address: "agent:root;node:three"},
+	}
+	lifecycleReceipt := func(kind convert.AgenticEnvelopeKind, build func(*convert.AgenticEnvelopeV1)) convert.CommitReceiptV1 {
+		envelope := &convert.AgenticEnvelopeV1{Version: convert.AgenticSchemaVersion, Kind: kind, Identity: id}
+		build(envelope)
+		digest, err := convert.LifecycleDigestV1(envelope)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return convert.CommitReceiptV1{Revision: "revision", Domain: "lifecycle", Kind: kind, Identity: id, Digest: digest}
+	}
+	emitResume := func(e *Emitter, resume convert.ResumedV1) bool {
+		receipt := lifecycleReceipt(convert.EnvelopeResumed, func(envelope *convert.AgenticEnvelopeV1) { envelope.Resumed = &resume })
+		return e.Resumed(resume, receipt)
+	}
+
+	missingSink := testsse.NewSink()
+	missing := NewObserverEmitter(t.Context(), missingSink.Writer(), missingSink.SSEWriter())
+	if emitResume(missing, convert.ResumedV1{PauseID: "pause", Targets: targets, Full: true, NewTurnID: "turn-2", NewAttemptID: "attempt-2"}) {
+		t.Fatal("resume emitted before pause")
+	}
+	if got := normalizedFrames(t, missingSink); len(got) != 0 {
+		t.Fatalf("frames before pause = %#v", got)
+	}
+
+	sink := testsse.NewSink()
+	emit := NewObserverEmitter(t.Context(), sink.Writer(), sink.SSEWriter())
+	correlation := &convert.ApprovalInterruptCorrelation{ApprovalRequestID: "approval", InterruptTargetID: targets[2].ID, InterruptAddress: targets[2].Address}
+	pause := convert.PausedV1{PauseID: "pause", Targets: targets, Correlation: correlation}
+	pauseReceipt := lifecycleReceipt(convert.EnvelopePaused, func(envelope *convert.AgenticEnvelopeV1) { envelope.Paused = &pause })
+	if !emit.Paused(pause, pauseReceipt) {
+		t.Fatalf("pause emit failed: %v / %v", emit.Err(), emit.EncErr())
+	}
+	duplicateReceipt := pauseReceipt
+	duplicateReceipt.Revision = "different-revision"
+	if emit.Paused(pause, duplicateReceipt) {
+		t.Fatal("duplicate pause ID was committed twice")
+	}
+	if emitResume(emit, convert.ResumedV1{PauseID: "pause", Targets: []convert.InterruptTargetV1{targets[2], targets[0]}, NewTurnID: "turn-2", NewAttemptID: "attempt-2"}) {
+		t.Fatal("out-of-order subset resumed")
+	}
+	if emitResume(emit, convert.ResumedV1{PauseID: "pause", Targets: targets[:2], Full: true, NewTurnID: "turn-2", NewAttemptID: "attempt-2"}) {
+		t.Fatal("incomplete full target set resumed")
+	}
+	if !emitResume(emit, convert.ResumedV1{PauseID: "pause", Targets: []convert.InterruptTargetV1{targets[1]}, NewTurnID: "turn-2", NewAttemptID: "attempt-2"}) {
+		t.Fatalf("partial resume failed: %v / %v", emit.Err(), emit.EncErr())
+	}
+	remaining := []convert.InterruptTargetV1{targets[0], targets[2]}
+	wrongCorrelation := *correlation
+	wrongCorrelation.ApprovalRequestID = "different"
+	if emitResume(emit, convert.ResumedV1{PauseID: "pause", Targets: remaining, Full: true, NewTurnID: "turn-3", NewAttemptID: "attempt-3", Correlation: &wrongCorrelation}) {
+		t.Fatal("mismatched resume correlation was accepted")
+	}
+	if !emitResume(emit, convert.ResumedV1{PauseID: "pause", Targets: remaining, Full: true, NewTurnID: "turn-3", NewAttemptID: "attempt-3", Correlation: correlation}) {
+		t.Fatalf("full resume failed: %v / %v", emit.Err(), emit.EncErr())
+	}
+	if got := golden.FrameTypes(normalizedFrames(t, sink)); !reflect.DeepEqual(got, []string{"CUSTOM", "CUSTOM", "CUSTOM"}) {
+		t.Fatalf("types = %v", got)
+	}
+}
+
 func TestCommittedLifecycleWrappers(t *testing.T) {
 	t.Parallel()
 	root := agenticProjection(t).Public.Identity
@@ -291,19 +610,14 @@ func TestCommittedLifecycleWrappers(t *testing.T) {
 			return e.TurnFinished(convert.LifecycleFactV1{Detail: "done"}, r)
 		}, []string{"CUSTOM"}},
 		{"attempt replaced", convert.EnvelopeAttemptReplaced, root, func(v *convert.AgenticEnvelopeV1) {
-			v.AttemptReplaced = &convert.AttemptReplacedV1{OldAttemptID: "old", NewAttemptID: "new", Cause: "retry", Semantics: "replace"}
+			v.AttemptReplaced = &convert.AttemptReplacedV1{OldAttemptID: root.AttemptID, NewAttemptID: "new", Cause: "retry", Semantics: "replace"}
 		}, func(e *Emitter, r convert.CommitReceiptV1) bool {
-			return e.AttemptReplaced(convert.AttemptReplacedV1{OldAttemptID: "old", NewAttemptID: "new", Cause: "retry", Semantics: "replace"}, r)
+			return e.AttemptReplaced(convert.AttemptReplacedV1{OldAttemptID: root.AttemptID, NewAttemptID: "new", Cause: "retry", Semantics: "replace"}, r)
 		}, []string{"CUSTOM"}},
 		{"paused", convert.EnvelopePaused, root, func(v *convert.AgenticEnvelopeV1) {
-			v.Paused = &convert.PausedV1{Targets: []convert.InterruptTargetV1{{ID: "interrupt", Address: "agent:root"}}}
+			v.Paused = &convert.PausedV1{PauseID: "pause", Targets: []convert.InterruptTargetV1{{ID: "interrupt", Address: "agent:root"}}}
 		}, func(e *Emitter, r convert.CommitReceiptV1) bool {
-			return e.Paused(convert.PausedV1{Targets: []convert.InterruptTargetV1{{ID: "interrupt", Address: "agent:root"}}}, r)
-		}, []string{"CUSTOM"}},
-		{"resumed", convert.EnvelopeResumed, root, func(v *convert.AgenticEnvelopeV1) {
-			v.Resumed = &convert.ResumedV1{PauseID: "pause", Targets: []convert.InterruptTargetV1{{ID: "interrupt", Address: "agent:root"}}, Full: true, NewTurnID: "turn-2", NewAttemptID: "attempt-2"}
-		}, func(e *Emitter, r convert.CommitReceiptV1) bool {
-			return e.Resumed(convert.ResumedV1{PauseID: "pause", Targets: []convert.InterruptTargetV1{{ID: "interrupt", Address: "agent:root"}}, Full: true, NewTurnID: "turn-2", NewAttemptID: "attempt-2"}, r)
+			return e.Paused(convert.PausedV1{PauseID: "pause", Targets: []convert.InterruptTargetV1{{ID: "interrupt", Address: "agent:root"}}}, r)
 		}, []string{"CUSTOM"}},
 		{"cancelled", convert.EnvelopeCancelled, root, func(v *convert.AgenticEnvelopeV1) {
 			v.Cancelled = &convert.CancelledV1{RequestedMode: "graceful", ObservedMode: "immediate", Classification: "timeout"}

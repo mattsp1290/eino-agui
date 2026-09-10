@@ -17,5 +17,33 @@
     "mcp_tool_approval_request", "mcp_tool_approval_response"
   ],
   "nestedResultKinds": ["text", "image", "audio", "video", "file"],
+  "publicShapes": [
+    {"type": "reasoning", "payload": "text"},
+    {"type": "user_input_text", "payload": "text"},
+    {"type": "user_input_image", "payload": "media"},
+    {"type": "user_input_audio", "payload": "media"},
+    {"type": "user_input_video", "payload": "media"},
+    {"type": "user_input_file", "payload": "media"},
+    {"type": "tool_search_result", "payload": "toolSearchResult"},
+    {"type": "assistant_gen_text", "payload": "text", "optional": "providerAnnotations"},
+    {"type": "assistant_gen_image", "payload": "media"},
+    {"type": "assistant_gen_audio", "payload": "media"},
+    {"type": "assistant_gen_video", "payload": "media"},
+    {"type": "function_tool_call", "payload": "functionToolCall"},
+    {"type": "function_tool_result", "payload": "functionToolResult"},
+    {"type": "server_tool_call", "payload": "serverToolCall"},
+    {"type": "server_tool_result", "payload": "serverToolResult"},
+    {"type": "mcp_tool_call", "payload": "mcpToolCall"},
+    {"type": "mcp_tool_result", "payload": "mcpToolResult"},
+    {"type": "mcp_list_tools_result", "payload": "mcpListToolsResult"},
+    {"type": "mcp_tool_approval_request", "payload": "mcpApprovalRequest"},
+    {"type": "mcp_tool_approval_response", "payload": "mcpApprovalResponse"}
+  ],
+  "annotationShapes": {
+    "openai": ["file_citation", "url_citation", "container_file_citation", "file_path"],
+    "claude": ["char_location", "page_location", "content_block_location", "web_search_result_location"],
+    "gemini": ["chunks", "supports", "webSearchQueries", "renderedSearchContent"]
+  },
+  "responseMetaEnvelope": "response_meta",
   "privateFields": ["signature", "extra", "extension", "encrypted_index", "sdk_blob", "response_id", "checkpoint"]
 }

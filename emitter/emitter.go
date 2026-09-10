@@ -34,6 +34,8 @@ type Emitter struct {
 	startedToolCalls       map[string]struct{}
 	endedToolCalls         map[string]struct{}
 	agenticAttempts        map[string]string
+	agenticPauses          map[string]committedPause
+	agenticReceipts        map[string]struct{}
 }
 
 // NewEmitter builds an Emitter bound to a request's concrete SSE writer pair.
