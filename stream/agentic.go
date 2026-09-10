@@ -102,10 +102,14 @@ func StreamAgenticTurn(ctx context.Context, am model.AgenticModel, messages []*s
 }
 
 type blockLedger struct {
-	kind    schema.ContentBlockType
-	context convert.AgenticBlockContext
-	callID  string
-	name    string
+	kind              schema.ContentBlockType
+	context           convert.AgenticBlockContext
+	callID            string
+	name              string
+	serverLabel       string
+	approvalRequestID string
+	url               string
+	mimeType          string
 }
 type agenticDrain struct {
 	result        *AgenticResult
@@ -234,28 +238,153 @@ func (s *agenticDrain) apply(chunk *schema.AgenticMessage) error {
 
 func normalizeStreamBlock(block *schema.ContentBlock, ledger blockLedger) (*schema.ContentBlock, blockLedger, error) {
 	copyBlock := *block
-	if block.Type != schema.ContentBlockTypeFunctionToolCall || block.FunctionToolCall == nil {
-		return &copyBlock, ledger, nil
-	}
-	call := *block.FunctionToolCall
-	if call.CallID != "" {
-		if ledger.callID != "" && ledger.callID != call.CallID {
-			return nil, ledger, errors.New("function call ID changed")
+	var err error
+	merge := func(current *string, next, field string) {
+		if err != nil || next == "" {
+			return
 		}
-		ledger.callID = call.CallID
-	}
-	if call.Name != "" {
-		if ledger.name != "" && ledger.name != call.Name {
-			return nil, ledger, errors.New("function call name changed")
+		if *current != "" && *current != next {
+			err = fmt.Errorf("%s changed", field)
+			return
 		}
-		ledger.name = call.Name
+		*current = next
 	}
-	call.CallID, call.Name = ledger.callID, ledger.name
-	if call.CallID == "" {
-		return nil, ledger, errors.New("function call ID is required before argument deltas")
+	switch block.Type {
+	case schema.ContentBlockTypeFunctionToolCall:
+		if block.FunctionToolCall == nil {
+			break
+		}
+		value := *block.FunctionToolCall
+		merge(&ledger.callID, value.CallID, "function call ID")
+		merge(&ledger.name, value.Name, "function call name")
+		value.CallID, value.Name = ledger.callID, ledger.name
+		if value.CallID == "" {
+			return nil, ledger, errors.New("function call ID is required before argument deltas")
+		}
+		copyBlock.FunctionToolCall = &value
+	case schema.ContentBlockTypeFunctionToolResult:
+		if block.FunctionToolResult == nil {
+			break
+		}
+		value := *block.FunctionToolResult
+		merge(&ledger.callID, value.CallID, "function result call ID")
+		merge(&ledger.name, value.Name, "function result name")
+		value.CallID, value.Name = ledger.callID, ledger.name
+		copyBlock.FunctionToolResult = &value
+	case schema.ContentBlockTypeServerToolCall:
+		if block.ServerToolCall == nil {
+			break
+		}
+		value := *block.ServerToolCall
+		merge(&ledger.callID, value.CallID, "server call ID")
+		merge(&ledger.name, value.Name, "server call name")
+		value.CallID, value.Name = ledger.callID, ledger.name
+		copyBlock.ServerToolCall = &value
+	case schema.ContentBlockTypeServerToolResult:
+		if block.ServerToolResult == nil {
+			break
+		}
+		value := *block.ServerToolResult
+		merge(&ledger.callID, value.CallID, "server result call ID")
+		merge(&ledger.name, value.Name, "server result name")
+		value.CallID, value.Name = ledger.callID, ledger.name
+		copyBlock.ServerToolResult = &value
+	case schema.ContentBlockTypeMCPToolCall:
+		if block.MCPToolCall == nil {
+			break
+		}
+		value := *block.MCPToolCall
+		merge(&ledger.serverLabel, value.ServerLabel, "MCP server label")
+		merge(&ledger.approvalRequestID, value.ApprovalRequestID, "MCP approval request ID")
+		merge(&ledger.callID, value.CallID, "MCP call ID")
+		merge(&ledger.name, value.Name, "MCP call name")
+		value.ServerLabel, value.ApprovalRequestID = ledger.serverLabel, ledger.approvalRequestID
+		value.CallID, value.Name = ledger.callID, ledger.name
+		copyBlock.MCPToolCall = &value
+	case schema.ContentBlockTypeMCPToolResult:
+		if block.MCPToolResult == nil {
+			break
+		}
+		value := *block.MCPToolResult
+		merge(&ledger.serverLabel, value.ServerLabel, "MCP server label")
+		merge(&ledger.callID, value.CallID, "MCP result call ID")
+		merge(&ledger.name, value.Name, "MCP result name")
+		value.ServerLabel, value.CallID, value.Name = ledger.serverLabel, ledger.callID, ledger.name
+		copyBlock.MCPToolResult = &value
+	case schema.ContentBlockTypeMCPListToolsResult:
+		if block.MCPListToolsResult == nil {
+			break
+		}
+		value := *block.MCPListToolsResult
+		merge(&ledger.serverLabel, value.ServerLabel, "MCP server label")
+		value.ServerLabel = ledger.serverLabel
+		copyBlock.MCPListToolsResult = &value
+	case schema.ContentBlockTypeMCPToolApprovalRequest:
+		if block.MCPToolApprovalRequest == nil {
+			break
+		}
+		value := *block.MCPToolApprovalRequest
+		merge(&ledger.approvalRequestID, value.ID, "MCP approval request ID")
+		merge(&ledger.serverLabel, value.ServerLabel, "MCP server label")
+		merge(&ledger.name, value.Name, "MCP approval request name")
+		value.ID, value.ServerLabel, value.Name = ledger.approvalRequestID, ledger.serverLabel, ledger.name
+		copyBlock.MCPToolApprovalRequest = &value
+	case schema.ContentBlockTypeMCPToolApprovalResponse:
+		if block.MCPToolApprovalResponse == nil {
+			break
+		}
+		value := *block.MCPToolApprovalResponse
+		merge(&ledger.approvalRequestID, value.ApprovalRequestID, "MCP approval request ID")
+		value.ApprovalRequestID = ledger.approvalRequestID
+		copyBlock.MCPToolApprovalResponse = &value
+	case schema.ContentBlockTypeAssistantGenImage:
+		if block.AssistantGenImage == nil {
+			break
+		}
+		value := *block.AssistantGenImage
+		merge(&ledger.url, value.URL, "generated image URL")
+		merge(&ledger.mimeType, value.MIMEType, "generated image MIME type")
+		value.URL, value.MIMEType = ledger.url, ledger.mimeType
+		copyBlock.AssistantGenImage = &value
+	case schema.ContentBlockTypeAssistantGenAudio:
+		if block.AssistantGenAudio == nil {
+			break
+		}
+		value := *block.AssistantGenAudio
+		merge(&ledger.url, value.URL, "generated audio URL")
+		merge(&ledger.mimeType, value.MIMEType, "generated audio MIME type")
+		value.URL, value.MIMEType = ledger.url, ledger.mimeType
+		copyBlock.AssistantGenAudio = &value
+	case schema.ContentBlockTypeAssistantGenVideo:
+		if block.AssistantGenVideo == nil {
+			break
+		}
+		value := *block.AssistantGenVideo
+		merge(&ledger.url, value.URL, "generated video URL")
+		merge(&ledger.mimeType, value.MIMEType, "generated video MIME type")
+		value.URL, value.MIMEType = ledger.url, ledger.mimeType
+		copyBlock.AssistantGenVideo = &value
 	}
-	copyBlock.FunctionToolCall = &call
+	if err != nil {
+		return nil, ledger, err
+	}
 	return &copyBlock, ledger, nil
+}
+
+func restoreStreamBlockFields(block *schema.ContentBlock, ledger blockLedger) *schema.ContentBlock {
+	if block == nil {
+		return nil
+	}
+	copyBlock := *block
+	switch block.Type {
+	case schema.ContentBlockTypeMCPToolCall:
+		if block.MCPToolCall != nil {
+			value := *block.MCPToolCall
+			value.ApprovalRequestID = ledger.approvalRequestID
+			copyBlock.MCPToolCall = &value
+		}
+	}
+	return &copyBlock
 }
 
 func (s *agenticDrain) emitTransient(role schema.AgenticRoleType, block *schema.ContentBlock, context convert.AgenticBlockContext) error {
@@ -313,8 +442,20 @@ func (s *agenticDrain) finish(primary error) (*AgenticResult, error) {
 		primary = concatErr
 	}
 	if concatErr == nil {
-		s.result.Assistant = assistant
 		contexts, indices := s.finalContexts()
+		if len(assistant.ContentBlocks) != len(indices) {
+			if primary == nil {
+				primary = errors.New("agentic stream block ledger does not match concatenated output")
+			}
+		} else {
+			copyAssistant := *assistant
+			copyAssistant.ContentBlocks = append([]*schema.ContentBlock(nil), assistant.ContentBlocks...)
+			for i, index := range indices {
+				copyAssistant.ContentBlocks[i] = restoreStreamBlockFields(copyAssistant.ContentBlocks[i], s.indexed[index])
+			}
+			assistant = &copyAssistant
+		}
+		s.result.Assistant = assistant
 		s.result.SeenBlockIndices = indices
 		if primary == nil {
 			projection, err := convert.ToAgenticProjection(assistant, convert.AgenticProjectionContext{Identity: s.base, Blocks: contexts, Limits: s.config.limits})

@@ -1339,6 +1339,31 @@ func TestProjectionLimitsAndApprovalCorrelation(t *testing.T) {
 	}
 }
 
+func TestFunctionResultPartLimitAppliesBeforeProjection(t *testing.T) {
+	t.Parallel()
+	limits := DefaultProjectionLimits()
+	limits.MaxBlocks = 1
+	message := &schema.AgenticMessage{
+		Role: schema.AgenticRoleTypeUser,
+		ContentBlocks: []*schema.ContentBlock{schema.NewContentBlock(&schema.FunctionToolResult{
+			CallID: "call",
+			Name:   "lookup",
+			Content: []*schema.FunctionToolResultContentBlock{
+				{Type: schema.FunctionToolResultContentBlockTypeText, Text: &schema.UserInputText{Text: "first"}},
+				nil,
+			},
+		})},
+	}
+	_, err := ProjectAgenticMessage(message, AgenticProjectionContext{
+		Identity: testIdentity(),
+		Blocks:   []AgenticBlockContext{{BlockID: "block"}},
+		Limits:   limits,
+	})
+	if err == nil || !strings.Contains(err.Error(), "function result part limit exceeded") {
+		t.Fatalf("error = %v, want pre-projection function result part limit", err)
+	}
+}
+
 func TestProjectionAcceptsExactAndRejectsOneOverEncodedByteLimits(t *testing.T) {
 	t.Parallel()
 	message := &schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{

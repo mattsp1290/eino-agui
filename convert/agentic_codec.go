@@ -199,7 +199,7 @@ func projectBlock(block *schema.ContentBlock, bc AgenticBlockContext, base Agent
 		out.Identity.CallID = v.CallID
 		out.FunctionToolCall = &PublicFunctionToolCall{CallID: v.CallID, Name: v.Name, Arguments: v.Arguments}
 	case schema.ContentBlockTypeFunctionToolResult:
-		out.FunctionToolResult, err = projectFunctionResult(block.FunctionToolResult)
+		out.FunctionToolResult, err = projectFunctionResult(block.FunctionToolResult, limits)
 		if out.FunctionToolResult != nil {
 			out.Identity.CallID = out.FunctionToolResult.CallID
 		}
@@ -370,9 +370,12 @@ func projectMedia(url, data, mime, name string, detail schema.ImageURLDetail) (*
 	return &PublicMedia{URL: url, Base64Data: data, MIMEType: mime, Name: name, Detail: detail}, nil
 }
 
-func projectFunctionResult(v *schema.FunctionToolResult) (*PublicFunctionToolResult, error) {
+func projectFunctionResult(v *schema.FunctionToolResult, limits ProjectionLimits) (*PublicFunctionToolResult, error) {
 	if v.CallID == "" || v.Name == "" {
 		return nil, errors.New("call ID and name are required")
+	}
+	if len(v.Content) > limits.MaxBlocks {
+		return nil, errors.New("function result part limit exceeded")
 	}
 	out := &PublicFunctionToolResult{CallID: v.CallID, Name: v.Name, Content: make([]PublicFunctionResultPart, len(v.Content))}
 	for i, part := range v.Content {

@@ -184,6 +184,85 @@ func TestStreamAgenticTurnAllAssistantContentKinds(t *testing.T) {
 	}
 }
 
+func TestStreamAgenticTurnSupportsEinoSplitRichBlocks(t *testing.T) {
+	t.Parallel()
+	indexed := func(index int, block *schema.ContentBlock) *schema.ContentBlock {
+		block.StreamingMeta = &schema.StreamingMeta{Index: index}
+		return block
+	}
+	assistantChunks := []*schema.AgenticMessage{
+		{Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{
+			indexed(0, schema.NewContentBlock(&schema.AssistantGenImage{Base64Data: "YW", MIMEType: "image/png"})),
+			indexed(1, schema.NewContentBlock(&schema.ServerToolCall{CallID: "server-call", Name: "search"})),
+			indexed(2, schema.NewContentBlock(&schema.MCPToolCall{ServerLabel: "server", ApprovalRequestID: "approval", CallID: "mcp-call", Name: "lookup", Arguments: `{"q":`})),
+			indexed(3, schema.NewContentBlock(&schema.MCPListToolsResult{ServerLabel: "server", Tools: []*schema.MCPListToolsItem{{Name: "first"}}})),
+			indexed(4, schema.NewContentBlock(&schema.MCPToolApprovalRequest{ID: "approval", ServerLabel: "server", Name: "lookup", Arguments: `{"q":`})),
+		}},
+		{Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{
+			indexed(0, schema.NewContentBlock(&schema.AssistantGenImage{Base64Data: "Jj"})),
+			indexed(1, schema.NewContentBlock(&schema.ServerToolCall{Arguments: map[string]any{"q": "go"}})),
+			indexed(2, schema.NewContentBlock(&schema.MCPToolCall{Arguments: `"go"}`})),
+			indexed(3, schema.NewContentBlock(&schema.MCPListToolsResult{Tools: []*schema.MCPListToolsItem{{Name: "second"}}})),
+			indexed(4, schema.NewContentBlock(&schema.MCPToolApprovalRequest{Arguments: `"go"}`})),
+		}},
+	}
+	result, err := StreamAgenticTurn(
+		t.Context(), testmodel.NewAgenticReplayModel(assistantChunks), nil, agenticIDs(),
+		testBlockResolver{
+			0: {BlockID: "image"},
+			1: {BlockID: "server-call", ProviderServerID: "provider"},
+			2: {BlockID: "mcp-call"},
+			3: {BlockID: "mcp-list"},
+			4: {BlockID: "approval"},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocks := result.PublicProjection.Public.ContentBlocks
+	if got := blocks[0].Media.Base64Data; got != "YWJj" {
+		t.Fatalf("generated image base64 = %q, want %q", got, "YWJj")
+	}
+	if got := blocks[1].ServerToolCall.CallID; got != "server-call" {
+		t.Fatalf("server call ID = %q", got)
+	}
+	if got := blocks[2].MCPToolCall.Arguments; got != `{"q":"go"}` {
+		t.Fatalf("MCP arguments = %q", got)
+	}
+	if got := blocks[2].MCPToolCall.ApprovalRequestID; got != "approval" {
+		t.Fatalf("MCP approval request ID = %q, want restored correlation", got)
+	}
+	if got := len(blocks[3].MCPListToolsResult.Tools); got != 2 {
+		t.Fatalf("MCP tools = %d, want 2", got)
+	}
+	if got := blocks[4].MCPApprovalRequest.Arguments; got != `{"q":"go"}` {
+		t.Fatalf("approval arguments = %q", got)
+	}
+	if assistantChunks[1].ContentBlocks[0].AssistantGenImage.MIMEType != "" || assistantChunks[1].ContentBlocks[2].MCPToolCall.ApprovalRequestID != "" {
+		t.Fatal("stream normalization mutated caller-owned rich chunks")
+	}
+
+	functionChunks := []*schema.AgenticMessage{
+		{Role: schema.AgenticRoleTypeUser, ContentBlocks: []*schema.ContentBlock{indexed(0, schema.NewContentBlock(&schema.FunctionToolResult{
+			CallID: "call", Name: "lookup", Content: []*schema.FunctionToolResultContentBlock{{Type: schema.FunctionToolResultContentBlockTypeText, Text: &schema.UserInputText{Text: "first"}}},
+		}))}},
+		{Role: schema.AgenticRoleTypeUser, ContentBlocks: []*schema.ContentBlock{indexed(0, schema.NewContentBlock(&schema.FunctionToolResult{
+			Content: []*schema.FunctionToolResultContentBlock{{Type: schema.FunctionToolResultContentBlockTypeText, Text: &schema.UserInputText{Text: "second"}}},
+		}))}},
+	}
+	result, err = drainAgenticReader(
+		t.Context(), schema.StreamReaderFromArray(functionChunks), agenticIDs(), testBlockResolver{0: {BlockID: "result"}},
+		agenticConfig{limits: convert.DefaultProjectionLimits(), expectedRole: schema.AgenticRoleTypeUser},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	functionResult := result.PublicProjection.Public.ContentBlocks[0].FunctionToolResult
+	if functionResult.CallID != "call" || len(functionResult.Content) != 2 {
+		t.Fatalf("function result = %#v", functionResult)
+	}
+}
+
 func TestStreamAgenticTurnDetachesObserverAndFinishes(t *testing.T) {
 	t.Parallel()
 	chunks := testmodel.AgenticTextChunks(0, "one", "two", "three")
