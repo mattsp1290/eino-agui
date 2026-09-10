@@ -715,16 +715,59 @@ func TestToolDefinitionPreservesParameterRepresentation(t *testing.T) {
 	}
 }
 
+func TestToolDefinitionRejectsInvalidNestedParameterTrees(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		parameter *schema.ParameterInfo
+	}{
+		{name: "unknown type", parameter: &schema.ParameterInfo{Type: schema.DataType("decimal")}},
+		{name: "array with object fields", parameter: &schema.ParameterInfo{Type: schema.Array, ElemInfo: &schema.ParameterInfo{Type: schema.String}, SubParams: map[string]*schema.ParameterInfo{"value": {Type: schema.String}}}},
+		{name: "array with enum", parameter: &schema.ParameterInfo{Type: schema.Array, ElemInfo: &schema.ParameterInfo{Type: schema.String}, Enum: []string{"value"}}},
+		{name: "object with element", parameter: &schema.ParameterInfo{Type: schema.Object, ElemInfo: &schema.ParameterInfo{Type: schema.String}}},
+		{name: "object with enum", parameter: &schema.ParameterInfo{Type: schema.Object, Enum: []string{"value"}}},
+		{name: "string with child", parameter: &schema.ParameterInfo{Type: schema.String, SubParams: map[string]*schema.ParameterInfo{"value": {Type: schema.String}}}},
+		{name: "number with enum", parameter: &schema.ParameterInfo{Type: schema.Number, Enum: []string{"1"}}},
+		{name: "nil nested child", parameter: &schema.ParameterInfo{Type: schema.Object, SubParams: map[string]*schema.ParameterInfo{"value": nil}}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tool := &schema.ToolInfo{Name: "invalid", ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{"outer": tc.parameter})}
+			if _, err := projectToolDefinition(tool, DefaultProjectionLimits()); err == nil {
+				t.Fatal("invalid parameter tree was accepted")
+			}
+		})
+	}
+
+	valid := &schema.ToolInfo{Name: "valid", ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
+		"anything": {Type: schema.Array},
+		"objects": {
+			Type: schema.Array,
+			ElemInfo: &schema.ParameterInfo{Type: schema.Object, SubParams: map[string]*schema.ParameterInfo{
+				"label": {Type: schema.String, Enum: []string{"one", "two"}},
+			}},
+		},
+	})}
+	projected, err := projectToolDefinition(valid, DefaultProjectionLimits())
+	if err != nil {
+		t.Fatalf("valid nested parameter tree rejected: %v", err)
+	}
+	projected.Params["objects"].ElemInfo.Type = schema.DataType("decimal")
+	if err := validatePublicToolDefinition(&projected, DefaultProjectionLimits()); err == nil {
+		t.Fatal("caller-mutated invalid public parameter tree was accepted")
+	}
+}
+
 func TestToolDefinitionAppliesLimitsBeforeClone(t *testing.T) {
 	t.Parallel()
 	chain := func(depth int) *schema.ParameterInfo {
-		root := &schema.ParameterInfo{Type: schema.Object}
+		root := &schema.ParameterInfo{Type: schema.String}
 		current := root
 		for i := 1; i < depth; i++ {
-			current.ElemInfo = &schema.ParameterInfo{Type: schema.Object}
-			current = current.ElemInfo
+			root = &schema.ParameterInfo{Type: schema.Array, ElemInfo: current}
+			current = root
 		}
-		return root
+		return current
 	}
 	tool := func(parameter *schema.ParameterInfo) *schema.ToolInfo {
 		return &schema.ToolInfo{Name: "bounded", ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{"value": parameter})}

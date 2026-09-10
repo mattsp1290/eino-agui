@@ -486,6 +486,9 @@ func cloneParameter(v *schema.ParameterInfo, depth int, limits ProjectionLimits,
 	if v == nil {
 		return nil, errors.New("is nil")
 	}
+	if err := validateParameterShape(v.Type, v.ElemInfo != nil, v.SubParams != nil, len(v.Enum) != 0); err != nil {
+		return nil, err
+	}
 	if depth > limits.MaxJSONDepth {
 		return nil, errors.New("depth limit exceeded")
 	}
@@ -1528,6 +1531,9 @@ func validatePublicParameter(parameter *PublicParameterInfo, depth int, limits P
 	if parameter == nil {
 		return errors.New("parameter is nil")
 	}
+	if err := validateParameterShape(parameter.Type, parameter.ElemInfo != nil, parameter.SubParams != nil, len(parameter.Enum) != 0); err != nil {
+		return err
+	}
 	if depth > limits.MaxJSONDepth {
 		return errors.New("parameter depth limit exceeded")
 	}
@@ -1554,6 +1560,30 @@ func validatePublicParameter(parameter *PublicParameterInfo, depth int, limits P
 		if err := validatePublicParameter(child, depth+1, limits, entries, stack); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func validateParameterShape(parameterType schema.DataType, hasElement, hasSubParams, hasEnum bool) error {
+	switch parameterType {
+	case schema.Object:
+		if hasElement || hasEnum {
+			return errors.New("object parameter has incompatible element or enum fields")
+		}
+	case schema.Array:
+		if hasSubParams || hasEnum {
+			return errors.New("array parameter has incompatible object or enum fields")
+		}
+	case schema.String:
+		if hasElement || hasSubParams {
+			return errors.New("string parameter has incompatible nested fields")
+		}
+	case schema.Number, schema.Integer, schema.Null, schema.Boolean:
+		if hasElement || hasSubParams || hasEnum {
+			return errors.New("scalar parameter has incompatible nested or enum fields")
+		}
+	default:
+		return errors.New("parameter type is unknown")
 	}
 	return nil
 }
