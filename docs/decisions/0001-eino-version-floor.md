@@ -10,9 +10,8 @@ There are no active consumers requiring the older API, so the public stream
 result may evolve without a compatibility shim.
 
 The classic `model.ToolCallingChatModel` and `schema.Message` boundary remains
-the supported integration. Eino's `AgenticModel`, ADK runtime, tool search, and
-richer agentic blocks are deliberately outside this release because no current
-consumer establishes their AG-UI lifecycle semantics.
+supported. Decision 0005 supersedes the earlier agentic exclusion with a closed
+`AgenticModel`/typed-ADK projection; it does not widen the classic API.
 
 ## Evidence
 

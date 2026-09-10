@@ -35,3 +35,37 @@ jobs:
 
       - name: Race-sensitive bridge tests
         run: go test -race ./convert ./emitter ./stream ./tools
+
+      - name: Agentic inventory and lifecycle tests
+        run: go test ./internal/golden ./internal/deps ./stream -run 'Agentic|FunctionResultKind' -count=1
+
+      - name: Clean downloaded consumer
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GOPROXY: direct
+        run: GOWORK=off testdata/consumer/check.sh "$GITHUB_SHA"
+
+  agentic-client-conformance:
+    name: Agentic client conformance
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check out exact AG-UI fork
+        uses: actions/checkout@v4
+        with:
+          repository: mattsp1290/ag-ui
+          ref: aaa75b54d572be8cd1d51c72e951273c5b893ed0
+          path: ag-ui
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run exact reducer conformance
+        env:
+          AG_UI_REPO_DIR: ${{ github.workspace }}/ag-ui
+        run: testdata/agui-client/check.sh

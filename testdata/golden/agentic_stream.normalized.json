@@ -1,0 +1,14 @@
+{
+  "unit": "agenticStream",
+  "name": "live-continuation-and-replay-shapes",
+  "source": {
+    "repository": "github.com/mattsp1290/ag-ui",
+    "commit": "aaa75b54d572be8cd1d51c72e951273c5b893ed0",
+    "files": ["sdks/community/go/pkg/core/events", "sdks/community/go/pkg/encoding/sse"]
+  },
+  "frames": [
+    {"event": "TEXT_MESSAGE_CHUNK_<runtime>", "data": {"type": "TEXT_MESSAGE_CHUNK", "metadata": {"eino.agentic.v1": {"sessionId": "session-golden", "threadId": "session-golden", "runId": "run-golden", "turnId": "turn-golden", "messageId": "message-golden", "blockId": "block-golden", "attemptId": "attempt-golden", "agentPath": [{"name": "root", "runId": "run-golden"}], "transient": true}}, "messageId": "message-golden", "role": "assistant", "delta": "hello"}},
+    {"event": "CUSTOM_<runtime>", "data": {"type": "CUSTOM", "name": "eino.agentic.v1", "value": {"version": 1, "kind": "content_block"}}}
+  ],
+  "mergeRule": "replace transient/native view by full identity; never append the custom supplement as a second logical block"
+}

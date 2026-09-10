@@ -14,6 +14,7 @@ typed and generic event emission, and classic `ToolCallingChatModel` streaming.
 Application orchestration remains outside the library: HTTP serving, route
 policy, persistence, tool execution, approvals, resume, and checkpointing.
 
-Eino AgenticModel/ADK, MCP/server-tool blocks, tool search, and non-image
-multimodal conversion require a concrete consumer and separate lifecycle design
-before they enter this package.
+Decision 0005 adds Eino AgenticModel/typed-ADK observation, MCP/server-tool
+records, tool search, and richer media through a separate closed projection.
+Execution, persistence, approval authority, replay storage, and checkpoint
+ownership remain application responsibilities.

@@ -7,4 +7,8 @@
 // the concrete buffered writer pair used by the AG-UI SDK. Typed helpers and
 // caller-built events sent through Emit share one error-classification path.
 // Calls must be serialized by the caller.
+//
+// Agentic helpers distinguish detachable transient observers from
+// receipt-gated committed projection and lifecycle emission. They do not
+// commit state, authorize interrupts, or infer turn/run settlement.
 package emitter

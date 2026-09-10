@@ -67,7 +67,7 @@ func TestGoldenFixtureFilesAreNormalized(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Glob() error = %v", err)
 	}
-	if got, want := len(matches), 4; got != want {
+	if got, want := len(matches), 6; got != want {
 		t.Fatalf("fixture count = %d, want %d", got, want)
 	}
 
@@ -92,7 +92,7 @@ func TestGoldenFixtureFilesAreNormalized(t *testing.T) {
 		}
 		assertNoUnmaskedRuntimeValues(t, path, fixture)
 	}
-	for _, unit := range []string{"convert", "emitter", "streamTurn", "toolBinding"} {
+	for _, unit := range []string{"convert", "emitter", "streamTurn", "toolBinding", "agenticConvert", "agenticStream"} {
 		if !units[unit] {
 			t.Fatalf("missing fixture unit %q", unit)
 		}

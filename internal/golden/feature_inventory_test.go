@@ -21,9 +21,11 @@ func TestTargetFeatureInventory(t *testing.T) {
 		{"tool-definition metadata", "one-way-binding", "TestClientToolInfosPreservesMetadataWithoutAliasing"},
 		{"tool parentMessageId", "typed-helper", "TestStreamTurnEmitsReasoningTextAndLiveToolCalls"},
 		{"capability models", "direct-sdk", "TestUpgradeAPIContracts"},
-		{"AgenticModel/ADK/tool search", "out-of-scope", ""},
+		{"AgenticModel stream", "typed-helper", "TestStreamAgenticTurnCorrelatesIndexedChunks"},
+		{"typed ADK lifecycle", "typed-helper", "TestDrainAgenticEventsCompleteAndStreamingMessages"},
+		{"agentic tool search", "bridge-round-trip", "TestProjectAgenticMessageAllContentKinds"},
 		{"HTTP/persistence/tool execution", "out-of-scope", ""},
-		{"audio/video/document/binary conversion", "out-of-scope", ""},
+		{"agentic audio/video/document/binary projection", "bridge-round-trip", "TestProjectAgenticMessageAllContentKinds"},
 	}
 	allowed := map[string]bool{
 		"typed-helper": true, "bridge-round-trip": true, "one-way-binding": true,

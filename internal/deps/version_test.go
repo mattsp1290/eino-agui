@@ -5,6 +5,8 @@ import (
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
+	"github.com/cloudwego/eino/adk"
+	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 )
 
@@ -17,4 +19,8 @@ func TestUpgradeAPIContracts(t *testing.T) {
 	var _ = types.AgentCapabilities{}
 	var _ = schema.TokenUsage{}
 	var _ = schema.ToolInfo{Extra: map[string]any{}}
+	var _ model.AgenticModel
+	var _ = adk.EventFromAgenticMessage
+	var _ = adk.TypedInterrupt[*schema.AgenticMessage]
+	var _ = schema.ConcatAgenticMessages
 }

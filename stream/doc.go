@@ -4,4 +4,9 @@
 //
 // If live tool-call streaming is enabled, callers must not also emit post-turn
 // tool proposals for the same calls.
+//
+// StreamAgenticTurn drains model.AgenticModel with indexed block correlation.
+// DrainAgenticEvents consumes typed ADK observations through an explicit
+// abort-and-join source boundary. Observer failure detaches without cancelling
+// the host-owned execution context.
 package stream

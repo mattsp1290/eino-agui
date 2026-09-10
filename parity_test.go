@@ -26,6 +26,8 @@ func TestParityGoldenFixtures(t *testing.T) {
 				"TestToAGUIMessagesMatchesNormalizedGoldenFixture",
 				"TestMessageAndToolCallProtocolEnvelopeRoundTrip",
 				"TestToAGUITokenUsage",
+				"TestProjectAgenticMessageAllContentKinds",
+				"TestFixedDigestVectors",
 			},
 		},
 		{
@@ -35,6 +37,7 @@ func TestParityGoldenFixtures(t *testing.T) {
 				"TestMessagesSnapshotMatchesNormalizedGoldenFixture",
 				"TestEmitterTargetProtocolFieldsAndGenericPath",
 				"TestToolStartParentAndReasoningRole",
+				"TestEmitCommittedProjectionModes",
 			},
 		},
 		{
@@ -45,6 +48,8 @@ func TestParityGoldenFixtures(t *testing.T) {
 				"TestStreamTurnEmitsReasoningTextAndLiveToolCalls",
 				"TestStreamTurnUsageAndNilIndexCorrelation",
 				"TestStreamUsageMapsToRunEndings",
+				"TestStreamAgenticTurnCorrelatesIndexedChunks",
+				"TestDrainAgenticEventsCompleteAndStreamingMessages",
 			},
 		},
 		{
@@ -62,6 +67,8 @@ func TestParityGoldenFixtures(t *testing.T) {
 				"TestGoldenFixtureFilesAreNormalized",
 				"TestGoldenFixtureContracts",
 				"TestTargetFeatureInventory",
+				"TestAgenticContentKindInventory",
+				"TestFunctionResultKindInventory",
 			},
 		},
 	}

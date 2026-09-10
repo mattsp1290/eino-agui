@@ -9,6 +9,8 @@ into small packages for:
 - typed AG-UI SSE event emission: `emitter`
 - live eino stream tapping: `stream`
 - AG-UI client tool binding and classification: `tools`
+- bounded Eino v0.9.19 agentic projection and typed ADK observation across
+  `convert`, `emitter`, and `stream`
 
 See [docs/architecture/package-origins.md](docs/architecture/package-origins.md)
 for the extraction boundary and the app-owned behavior that deliberately stays
@@ -132,6 +134,46 @@ go run ./examples/stream
 It writes AG-UI SSE frames to stdout and the final assistant content plus tool
 owner ID to stderr.
 
+## Agentic Runtime Bridge
+
+The rich path accepts `schema.AgenticMessage` and `model.AgenticModel` directly:
+
+```go
+candidate, err := stream.StreamAgenticTurn(ctx, agenticModel, messages, ids, blockResolver,
+    stream.WithTransientSink(observer),
+)
+if err == nil {
+    // The host commits candidate.PublicProjection and its digest first.
+    emit.EmitCommittedProjection(candidate.PublicProjection, receipt,
+        emitter.DeliveryModeLiveContinuation)
+}
+```
+
+For typed ADK streams, wrap the raw iterator with abort and wait hooks connected
+to the same producer, then call `stream.DrainAgenticEvents`. Observer failure
+detaches only that sink; execution cancellation comes from the host context.
+
+All authoritative projections and lifecycle facts require a matching
+host-created `convert.CommitReceiptV1`. The bridge does not persist sessions,
+execute tools, own checkpoints, authorize approvals, retry model calls, or infer
+run completion. `TURN_FINISHED` and pause are nonterminal; committed run endings
+require explicit `loopSettled=true`.
+
+User-role projections expose a sanitized `NativeMessage` for host-assembled
+full transcript snapshots. Model input slices and their pointed-to messages are
+read-only for the duration of `StreamAgenticTurn`; the bridge copies the slice
+and model-option list and never mutates either.
+
+The only custom namespace is `eino.agentic.v1`. It carries durable identity and
+the rich semantics absent from the pinned AG-UI SDK while native AG-UI text,
+reasoning, function-tool, run, and subagent events remain available. Private
+provider continuation fields, encrypted reasoning, arbitrary extensions, and
+ADK checkpoint state are excluded.
+
+See [the complete agentic contract](docs/architecture/agentic-contract.md) for
+the 20-kind mapping, exact constructors, limits, receipt rules, and ownership
+boundary.
+
 ## Local Checks
 
 Install `goimports` once:
@@ -153,6 +195,7 @@ The full validation set used by CI and parity work is:
 go build ./...
 make check
 go test ./...
+go test -race ./convert ./emitter ./stream ./tools
 go test ./... -run Parity -count=1
 ```
 

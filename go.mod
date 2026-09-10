@@ -5,6 +5,7 @@ go 1.26.3
 require (
 	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260909025854-aaa75b54d572
 	github.com/cloudwego/eino v0.9.19
+	github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467
 	github.com/eino-contrib/jsonschema v1.0.3
 )
 

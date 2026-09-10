@@ -11,7 +11,7 @@ byte-for-byte SSE equality. Runtime-minted SSE frame IDs, event timestamps, and
 generated AG-UI message IDs are masked as placeholders. Stable semantic IDs such
 as `thread-golden`, `run-golden`, and tool-call IDs are intentionally preserved.
 
-The four fixture files correspond to the first extraction units:
+The classic fixture files correspond to the first extraction units:
 
 - `convert.normalized.json`: message conversion and provider-gated vision input.
 - `emitter.normalized.json`: `MESSAGES_SNAPSHOT` encrypted reasoning scrubbing.
@@ -19,6 +19,19 @@ The four fixture files correspond to the first extraction units:
   tool-call buffering.
 - `tool_binding.normalized.json`: client tool binding, classification, and
   client-tool handback.
+
+The agentic fixtures extend that baseline without redefining classic parity:
+
+- `agentic_convert.normalized.json`: exact 20-kind and five nested-kind public
+  inventory plus private-field exclusions.
+- `agentic_stream.normalized.json`: identified transient/native and committed
+  `eino.agentic.v1` supplement shapes.
+
+Agentic clients merge native rendering events with custom supplements only on
+the complete session/run/turn/message/block/attempt/agent-path identity tuple.
+The custom content block is authoritative after commit and is not appended as
+a duplicate logical block. Replay starts with a fresh reducer and consumes the
+complete canonical native sequence once.
 
 To re-check the fixtures against the reference implementation, run:
 
