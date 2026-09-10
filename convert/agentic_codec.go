@@ -738,8 +738,12 @@ func projectGemini(v *gemini.GroundingMetadata, blocks []PublicContentBlock, lim
 	if v == nil {
 		return nil, nil
 	}
-	if len(v.GroundingChunks)+len(v.GroundingSupports) > limits.MaxAnnotations {
-		return nil, errors.New("grounding entry limit exceeded")
+	annotationCount := 0
+	if err := addBoundedCount(&annotationCount, len(v.GroundingChunks), limits.MaxAnnotations, "grounding entry limit exceeded"); err != nil {
+		return nil, err
+	}
+	if err := addBoundedCount(&annotationCount, len(v.GroundingSupports), limits.MaxAnnotations, "grounding entry limit exceeded"); err != nil {
+		return nil, err
 	}
 	entries := 0
 	if err := addBoundedCount(&entries, len(v.WebSearchQueries), limits.MaxJSONEntries, "grounding value entry limit exceeded"); err != nil {
@@ -1312,8 +1316,12 @@ func validatePublicProviderAnnotations(annotations *PublicProviderAnnotations, t
 		return nil
 	}
 	limits := DefaultProjectionLimits()
-	if len(annotations.OpenAI)+len(annotations.Claude) > limits.MaxAnnotations {
-		return errors.New("provider annotation limit exceeded")
+	annotationCount := 0
+	if err := addBoundedCount(&annotationCount, len(annotations.OpenAI), limits.MaxAnnotations, "provider annotation limit exceeded"); err != nil {
+		return err
+	}
+	if err := addBoundedCount(&annotationCount, len(annotations.Claude), limits.MaxAnnotations, "provider annotation limit exceeded"); err != nil {
+		return err
 	}
 	for i, annotation := range annotations.OpenAI {
 		var err error
@@ -1380,8 +1388,12 @@ func validatePublicResponseMeta(meta *PublicResponseMeta) error {
 	}
 	if grounding := meta.GeminiGrounding; grounding != nil {
 		limits := DefaultProjectionLimits()
-		if len(grounding.Chunks)+len(grounding.Supports) > limits.MaxAnnotations {
-			return errors.New("grounding entry limit exceeded")
+		annotationCount := 0
+		if err := addBoundedCount(&annotationCount, len(grounding.Chunks), limits.MaxAnnotations, "grounding entry limit exceeded"); err != nil {
+			return err
+		}
+		if err := addBoundedCount(&annotationCount, len(grounding.Supports), limits.MaxAnnotations, "grounding entry limit exceeded"); err != nil {
+			return err
 		}
 		entries := 0
 		if err := addBoundedCount(&entries, len(grounding.WebSearchQueries), limits.MaxJSONEntries, "grounding value entry limit exceeded"); err != nil {

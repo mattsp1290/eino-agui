@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -667,6 +668,17 @@ func TestAnnotationLimitIsSharedAcrossProviders(t *testing.T) {
 	ctx.Limits = limits
 	if _, err := ProjectAgenticMessage(message, ctx); err == nil {
 		t.Fatal("combined one-over annotation count was accepted")
+	}
+}
+
+func TestBoundedCounterRejectsIntegerOverflow(t *testing.T) {
+	t.Parallel()
+	total := math.MaxInt - 1
+	if err := addBoundedCount(&total, 2, math.MaxInt, "overflow"); err == nil {
+		t.Fatal("overflowing count was accepted")
+	}
+	if total != math.MaxInt-1 {
+		t.Fatalf("rejected count changed total to %d", total)
 	}
 }
 
