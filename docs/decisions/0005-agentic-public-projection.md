@@ -32,7 +32,19 @@ Final projections and lifecycle facts use RFC 8785 canonical JSON and
 domain-separated SHA-256 digests. Authoritative emission requires a host
 receipt binding the revision, domain or lifecycle kind, identity, and digest.
 This binding validates the receipt's relationship to the candidate; it does
-not assert that the bridge inspected or committed host storage.
+not assert that the bridge inspected or committed host storage. Projection
+hashing revalidates the complete exported public value, including base/block
+identity consistency and provider metadata cross-references, so mutation cannot
+turn a previously valid candidate into a newly authenticated malformed one.
+Each receipt is consumed once per emitter after successful logical emission;
+fresh emitters may consume the same receipt for replay after reconnect.
+
+Provider annotations stay attached to their owning text block. Public response
+usage, provider terminal details, and Gemini grounding use a separate
+`response_meta` envelope authorized by the full projection receipt. Pause facts
+carry a host-owned durable pause ID. A resume requires a preceding pause on the
+same emitter, exact full or ordered partial targets, and the original approval
+correlation when its target is resumed.
 
 Projection uses explicit positive limits before cloning or encoding. Arbitrary
 server-tool values must be acyclic JSON-compatible data. Provider annotations

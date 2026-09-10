@@ -28,6 +28,7 @@ func TestParityGoldenFixtures(t *testing.T) {
 				"TestToAGUITokenUsage",
 				"TestProjectAgenticMessageAllContentKinds",
 				"TestGeminiGroundingTargetsExactAssistantTextBlock",
+				"TestProjectionDigestRejectsMutatedPublicProjection",
 				"TestFixedDigestVectors",
 			},
 		},

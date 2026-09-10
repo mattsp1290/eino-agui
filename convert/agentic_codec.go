@@ -911,6 +911,9 @@ func ProjectionDigestV1(value *PublicAgenticMessage) (CandidateDigestV1, error) 
 	if value == nil {
 		return "", errors.New("projection is nil")
 	}
+	if err := validatePublicAgenticMessage(value); err != nil {
+		return "", err
+	}
 	copy := *value
 	copy.Digest = ""
 	return digestCanonical("eino-agentic-v1\x00projection\x00", &copy)
@@ -1180,6 +1183,79 @@ func validatePublicContentBlock(block *PublicContentBlock) error {
 		}
 	} else if block.Identity.CallID != wantCallID {
 		return errors.New("content call ID does not match identity")
+	}
+	return nil
+}
+
+func validatePublicAgenticMessage(message *PublicAgenticMessage) error {
+	if message == nil || message.Version != AgenticSchemaVersion {
+		return errors.New("agentic projection has unsupported version")
+	}
+	limits := DefaultProjectionLimits()
+	if err := validateIdentity(message.Identity, limits.MaxAgentPathSegments, false); err != nil {
+		return fmt.Errorf("agentic projection identity: %w", err)
+	}
+	if message.Identity.BlockID != "" || message.Identity.CallID != "" || message.Identity.Transient {
+		return errors.New("agentic projection base identity cannot be block-scoped or transient")
+	}
+	if message.Role != schema.AgenticRoleTypeSystem && message.Role != schema.AgenticRoleTypeUser && message.Role != schema.AgenticRoleTypeAssistant {
+		return errors.New("agentic projection role is invalid")
+	}
+	if len(message.ContentBlocks) > limits.MaxBlocks {
+		return errors.New("agentic projection block limit exceeded")
+	}
+	seenBlocks := make(map[string]struct{}, len(message.ContentBlocks))
+	for i := range message.ContentBlocks {
+		block := &message.ContentBlocks[i]
+		if err := validatePublicContentBlock(block); err != nil {
+			return fmt.Errorf("agentic projection block %d: %w", i, err)
+		}
+		if !roleAllowsBlock(message.Role, block.Type) {
+			return fmt.Errorf("agentic projection block %d is incompatible with message role", i)
+		}
+		if _, duplicate := seenBlocks[block.Identity.BlockID]; duplicate {
+			return fmt.Errorf("agentic projection block %d has a duplicate block ID", i)
+		}
+		seenBlocks[block.Identity.BlockID] = struct{}{}
+		expected := cloneIdentity(message.Identity)
+		expected.BlockID = block.Identity.BlockID
+		expected.CallID = publicBlockCallID(block)
+		if !reflect.DeepEqual(block.Identity, expected) {
+			return fmt.Errorf("agentic projection block %d identity does not match its message", i)
+		}
+	}
+	if message.ResponseMeta != nil {
+		if err := validatePublicResponseMeta(message.ResponseMeta); err != nil {
+			return fmt.Errorf("agentic projection response metadata: %w", err)
+		}
+		if err := validatePublicGroundingTargets(message.ResponseMeta.GeminiGrounding, message.ContentBlocks); err != nil {
+			return fmt.Errorf("agentic projection response metadata: %w", err)
+		}
+	}
+	copyMessage := *message
+	copyMessage.Digest = ""
+	encoded, err := json.Marshal(&copyMessage)
+	if err != nil || len(encoded) > limits.MaxMessageBytes {
+		return errors.New("agentic projection encoded message limit exceeded")
+	}
+	return nil
+}
+
+func validatePublicGroundingTargets(grounding *PublicGeminiGrounding, blocks []PublicContentBlock) error {
+	if grounding == nil {
+		return nil
+	}
+	for i, support := range grounding.Supports {
+		if support.PartIndex < 0 || support.PartIndex >= len(blocks) || blocks[support.PartIndex].Type != schema.ContentBlockTypeAssistantGenText || blocks[support.PartIndex].Text == nil {
+			return fmt.Errorf("grounding support %d targets a non-text block", i)
+		}
+		text := *blocks[support.PartIndex].Text
+		if err := validateTextRange(text, support.StartIndex, support.EndIndex); err != nil {
+			return fmt.Errorf("grounding support %d: %w", i, err)
+		}
+		if support.Text != text[support.StartIndex:support.EndIndex] {
+			return fmt.Errorf("grounding support %d text does not match its target range", i)
+		}
 	}
 	return nil
 }

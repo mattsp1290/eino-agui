@@ -396,6 +396,47 @@ func TestGeminiGroundingTargetsExactAssistantTextBlock(t *testing.T) {
 	}
 }
 
+func TestProjectionDigestRejectsMutatedPublicProjection(t *testing.T) {
+	t.Parallel()
+	newProjection := func(t *testing.T) *PublicAgenticMessage {
+		t.Helper()
+		message := &schema.AgenticMessage{
+			Role:          schema.AgenticRoleTypeAssistant,
+			ContentBlocks: []*schema.ContentBlock{schema.NewContentBlock(&schema.AssistantGenText{Text: "source"})},
+			ResponseMeta: &schema.AgenticResponseMeta{GeminiExtension: &gemini.ResponseMetaExtension{GroundingMeta: &gemini.GroundingMetadata{
+				GroundingChunks: []*gemini.GroundingChunk{{Web: &gemini.GroundingChunkWeb{URI: "https://example.test"}}},
+				GroundingSupports: []*gemini.GroundingSupport{{
+					GroundingChunkIndices: []int{0}, Segment: &gemini.Segment{PartIndex: 0, StartIndex: 0, EndIndex: 6, Text: "source"},
+				}},
+			}}},
+		}
+		projection, err := ProjectAgenticMessage(message, testContext(AgenticBlockContext{BlockID: "block"}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return projection
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*PublicAgenticMessage)
+	}{
+		{"role", func(projection *PublicAgenticMessage) { projection.Role = "invalid" }},
+		{"base block scope", func(projection *PublicAgenticMessage) { projection.Identity.BlockID = "block" }},
+		{"block identity", func(projection *PublicAgenticMessage) { projection.ContentBlocks[0].Identity.MessageID = "different" }},
+		{"grounding target", func(projection *PublicAgenticMessage) {
+			projection.ResponseMeta.GeminiGrounding.Supports[0].Text = "altered"
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			projection := newProjection(t)
+			tc.mutate(projection)
+			if _, err := ProjectionDigestV1(projection); err == nil {
+				t.Fatal("mutated projection was accepted")
+			}
+		})
+	}
+}
+
 func TestProjectionLimitsAndApprovalCorrelation(t *testing.T) {
 	t.Parallel()
 	limits := DefaultProjectionLimits()
