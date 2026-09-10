@@ -344,26 +344,38 @@ func TestCommittedMultiEventBlockReportsEveryTransportFailureBoundary(t *testing
 	}
 	receipt := convert.CommitReceiptV1{Revision: "revision", Domain: "projection", Identity: id, Digest: projection.Digest}
 	// A committed reasoning block contains five native frames followed by its
-	// authoritative custom supplement. Fail immediately before each frame.
-	for allowed := 0; allowed < 6; allowed++ {
-		t.Run(fmt.Sprintf("after_%d_frames", allowed), func(t *testing.T) {
-			transport := &failAfterEventWrites{allowed: allowed}
-			writer := bufio.NewWriter(transport)
-			emit := NewObserverEmitter(t.Context(), writer, sse.NewSSEWriter())
-			if emit.EmitCommittedProjection(projection, receipt, DeliveryModeReplay) {
-				t.Fatal("transport failure reported success")
-			}
-			if emit.Err() == nil || transport.writes != allowed {
-				t.Fatalf("transport error=%v writes=%d, want %d", emit.Err(), transport.writes, allowed)
-			}
-			if frames := bytes.Count(transport.buffer.Bytes(), []byte("\n\n")); frames != allowed {
-				t.Fatalf("complete prefix frames=%d, want %d\n%s", frames, allowed, transport.buffer.String())
-			}
-			if len(emit.agenticReceipts) != 0 {
-				t.Fatal("partial transport prefix consumed the commit receipt")
-			}
-			if len(emit.agenticAttempts) != 0 {
-				t.Fatal("partial transport prefix advanced the authoritative attempt")
+	// authoritative custom supplement. Fail immediately before each frame on
+	// both SDK transport-error surfaces.
+	transports := []struct {
+		name   string
+		prefix string
+		writer func(*failAfterEventWrites) *bufio.Writer
+	}{
+		{name: "flush", prefix: "SSE flush failed:", writer: func(transport *failAfterEventWrites) *bufio.Writer { return bufio.NewWriter(transport) }},
+		{name: "write", prefix: "SSE write failed:", writer: func(transport *failAfterEventWrites) *bufio.Writer { return bufio.NewWriterSize(transport, 1) }},
+	}
+	for _, transportCase := range transports {
+		t.Run(transportCase.name, func(t *testing.T) {
+			for allowed := 0; allowed < 6; allowed++ {
+				t.Run(fmt.Sprintf("after_%d_frames", allowed), func(t *testing.T) {
+					transport := &failAfterEventWrites{allowed: allowed}
+					emit := NewObserverEmitter(t.Context(), transportCase.writer(transport), sse.NewSSEWriter())
+					if emit.EmitCommittedProjection(projection, receipt, DeliveryModeReplay) {
+						t.Fatal("transport failure reported success")
+					}
+					if emit.Err() == nil || !strings.HasPrefix(emit.Err().Error(), transportCase.prefix) || transport.writes != allowed {
+						t.Fatalf("transport error=%v writes=%d, want %s after %d", emit.Err(), transport.writes, transportCase.prefix, allowed)
+					}
+					if frames := bytes.Count(transport.buffer.Bytes(), []byte("\n\n")); frames != allowed {
+						t.Fatalf("complete prefix frames=%d, want %d\n%s", frames, allowed, transport.buffer.String())
+					}
+					if len(emit.agenticReceipts) != 0 {
+						t.Fatal("partial transport prefix consumed the commit receipt")
+					}
+					if len(emit.agenticAttempts) != 0 {
+						t.Fatal("partial transport prefix advanced the authoritative attempt")
+					}
+				})
 			}
 		})
 	}
