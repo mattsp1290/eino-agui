@@ -63,10 +63,18 @@ func validateIdentity(id AgenticIdentityV1, maxPath int, requireBlock bool) erro
 	if len(id.AgentPath) == 0 || len(id.AgentPath) > maxPath {
 		return errors.New("agent path must be non-empty and within the configured limit")
 	}
-	for _, segment := range id.AgentPath {
+	seenRunIDs := make(map[string]struct{}, len(id.AgentPath))
+	for i, segment := range id.AgentPath {
 		if segment.Name == "" || segment.RunID == "" {
 			return errors.New("agent path names and run IDs are required")
 		}
+		if i == 0 && segment.RunID != id.RunID {
+			return errors.New("agent path root run ID must match identity run ID")
+		}
+		if _, duplicate := seenRunIDs[segment.RunID]; duplicate {
+			return errors.New("agent path run IDs must be unique")
+		}
+		seenRunIDs[segment.RunID] = struct{}{}
 	}
 	return nil
 }
@@ -1047,6 +1055,9 @@ func validateEnvelope(value *AgenticEnvelopeV1, verifyDigest bool) error {
 	if err := validateIdentity(value.Identity, DefaultProjectionLimits().MaxAgentPathSegments, value.Kind == EnvelopeContentBlock); err != nil {
 		return fmt.Errorf("agentic envelope identity: %w", err)
 	}
+	if value.Kind != EnvelopeContentBlock && (value.Identity.BlockID != "" || value.Identity.CallID != "") {
+		return errors.New("non-content envelope identity cannot be block-scoped")
+	}
 	selected := boolCount(value.ContentBlock != nil, value.ResponseMeta != nil, value.Lifecycle != nil, value.AttemptReplaced != nil, value.Paused != nil, value.Resumed != nil, value.Cancelled != nil)
 	if selected != 1 {
 		return errors.New("agentic envelope must contain exactly one payload")
@@ -1070,6 +1081,15 @@ func validateEnvelope(value *AgenticEnvelopeV1, verifyDigest bool) error {
 	}
 	if !valid {
 		return errors.New("agentic envelope kind does not match payload")
+	}
+	if value.Lifecycle != nil {
+		runTerminal := value.Kind == EnvelopeRunFinished || value.Kind == EnvelopeRunError
+		if runTerminal != value.Lifecycle.LoopSettled {
+			return errors.New("loop settlement is valid only and required for run terminal facts")
+		}
+		if (value.Kind == EnvelopeSubagentStarted || value.Kind == EnvelopeSubagentFinished || value.Kind == EnvelopeSubagentError) && len(value.Identity.AgentPath) < 2 {
+			return errors.New("subagent lifecycle requires a nested agent path")
+		}
 	}
 	if value.ContentBlock != nil && !reflect.DeepEqual(value.ContentBlock.Identity, value.Identity) {
 		return errors.New("agentic envelope content identity does not match envelope identity")
@@ -1124,6 +1144,15 @@ func validateEnvelope(value *AgenticEnvelopeV1, verifyDigest bool) error {
 		if err := validateCancellation(value.Cancelled); err != nil {
 			return err
 		}
+	}
+	bounded := *value
+	bounded.Digest = ""
+	encoded, err := json.Marshal(&bounded)
+	if err != nil {
+		return errors.New("agentic envelope is not JSON-compatible")
+	}
+	if len(encoded) > DefaultProjectionLimits().MaxMessageBytes {
+		return errors.New("agentic envelope exceeds the public message limit")
 	}
 	if verifyDigest {
 		if value.Digest == "" {

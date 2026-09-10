@@ -619,6 +619,88 @@ func TestEnvelopeStrictDecodeAndDigest(t *testing.T) {
 	}
 }
 
+func TestLifecycleEnvelopeRejectsInvalidScopeSettlementAndSize(t *testing.T) {
+	t.Parallel()
+	newLifecycle := func(kind AgenticEnvelopeKind) *AgenticEnvelopeV1 {
+		return &AgenticEnvelopeV1{Version: AgenticSchemaVersion, Kind: kind, Identity: testIdentity(), Lifecycle: &LifecycleFactV1{}}
+	}
+	tests := []struct {
+		name     string
+		envelope *AgenticEnvelopeV1
+	}{
+		{name: "block-scoped turn", envelope: func() *AgenticEnvelopeV1 {
+			value := newLifecycle(EnvelopeTurnFinished)
+			value.Identity.BlockID = "block"
+			return value
+		}()},
+		{name: "call-scoped pause", envelope: func() *AgenticEnvelopeV1 {
+			value := &AgenticEnvelopeV1{Version: AgenticSchemaVersion, Kind: EnvelopePaused, Identity: testIdentity(), Paused: &PausedV1{PauseID: "pause", Targets: []InterruptTargetV1{{ID: "target", Address: "node/0"}}}}
+			value.Identity.CallID = "call"
+			return value
+		}()},
+		{name: "unsettled run finish", envelope: newLifecycle(EnvelopeRunFinished)},
+		{name: "unsettled run error", envelope: newLifecycle(EnvelopeRunError)},
+		{name: "settled turn", envelope: func() *AgenticEnvelopeV1 {
+			value := newLifecycle(EnvelopeTurnFinished)
+			value.Lifecycle.LoopSettled = true
+			return value
+		}()},
+		{name: "root subagent", envelope: newLifecycle(EnvelopeSubagentStarted)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := LifecycleDigestV1(tc.envelope); err == nil {
+				t.Fatal("invalid lifecycle envelope was accepted")
+			}
+		})
+	}
+
+	validTerminal := newLifecycle(EnvelopeRunFinished)
+	validTerminal.Lifecycle.LoopSettled = true
+	if _, err := LifecycleDigestV1(validTerminal); err != nil {
+		t.Fatalf("valid settled run terminal rejected: %v", err)
+	}
+	validSubagent := newLifecycle(EnvelopeSubagentStarted)
+	validSubagent.Identity.AgentPath = append(validSubagent.Identity.AgentPath, AgentPathSegment{Name: "child", RunID: "child-run"})
+	if _, err := LifecycleDigestV1(validSubagent); err != nil {
+		t.Fatalf("valid nested subagent lifecycle rejected: %v", err)
+	}
+
+	oversized := newLifecycle(EnvelopeTurnFinished)
+	oversized.Lifecycle.Detail = strings.Repeat("x", DefaultProjectionLimits().MaxMessageBytes)
+	if _, err := LifecycleDigestV1(oversized); err == nil {
+		t.Fatal("oversized in-memory lifecycle envelope was accepted")
+	}
+}
+
+func TestAgenticIdentityRejectsMismatchedOrRepeatedPathRunIDs(t *testing.T) {
+	t.Parallel()
+	message := &schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{
+		schema.NewContentBlock(&schema.AssistantGenText{Text: "answer"}),
+	}}
+	for _, tc := range []struct {
+		name string
+		path []AgentPathSegment
+	}{
+		{name: "mismatched root", path: []AgentPathSegment{{Name: "root", RunID: "different-run"}}},
+		{name: "repeated descendant run", path: []AgentPathSegment{{Name: "root", RunID: "run-1"}, {Name: "child", RunID: "run-1"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := testContext(AgenticBlockContext{BlockID: "block"})
+			ctx.Identity.AgentPath = tc.path
+			if _, err := ProjectAgenticMessage(message, ctx); err == nil {
+				t.Fatal("invalid agent path was accepted")
+			}
+		})
+	}
+
+	ctx := testContext(AgenticBlockContext{BlockID: "block"})
+	ctx.Identity.AgentPath = []AgentPathSegment{{Name: "same", RunID: "run-1"}, {Name: "same", RunID: "child-run"}}
+	if _, err := ProjectAgenticMessage(message, ctx); err != nil {
+		t.Fatalf("repeated display names with unique run IDs rejected: %v", err)
+	}
+}
+
 func TestEnvelopeStrictDecodeRejectsAmbiguousContentUnion(t *testing.T) {
 	t.Parallel()
 	projection, err := ToAgenticProjection(
