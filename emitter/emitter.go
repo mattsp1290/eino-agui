@@ -33,6 +33,7 @@ type Emitter struct {
 	openReasoningMessageID string
 	startedToolCalls       map[string]struct{}
 	endedToolCalls         map[string]struct{}
+	agenticAttempts        map[string]string
 }
 
 // NewEmitter builds an Emitter bound to a request's concrete SSE writer pair.

@@ -302,8 +302,13 @@ func drainAgentMessageOutput(ctx context.Context, output *adk.TypedMessageVarian
 	if output == nil {
 		return nil, nil, errors.New("agent message output is nil")
 	}
+	streamOwnedByDrain := false
 	if output.MessageStream != nil {
-		defer output.MessageStream.Close()
+		defer func() {
+			if !streamOwnedByDrain {
+				output.MessageStream.Close()
+			}
+		}()
 	}
 	if output.AgenticRole != schema.AgenticRoleTypeAssistant && output.AgenticRole != schema.AgenticRoleTypeUser && output.AgenticRole != schema.AgenticRoleTypeSystem {
 		return nil, nil, errors.New("agent message output has invalid role")
@@ -316,6 +321,7 @@ func drainAgentMessageOutput(ctx context.Context, output *adk.TypedMessageVarian
 			return nil, nil, errors.New("streaming message variant must contain only a stream")
 		}
 		streamConfig := agenticConfig{limits: config.limits, sink: config.sink, expectedRole: output.AgenticRole}
+		streamOwnedByDrain = true
 		result, err := drainAgenticReader(ctx, output.MessageStream, resolution.Identity, resolution.Blocks, streamConfig)
 		if err != nil {
 			return nil, result.ObserverErr, err
@@ -371,10 +377,10 @@ func projectCancel(cancelled *adk.CancelError) convert.CancelledV1 {
 	if cancelled == nil || cancelled.Info == nil {
 		return out
 	}
-	out.RequestedMode = fmt.Sprint(cancelled.Info.Mode)
+	out.RequestedMode = cancelModeName(cancelled.Info.Mode)
 	out.ObservedMode = out.RequestedMode
 	if cancelled.Info.Escalated {
-		out.ObservedMode = fmt.Sprint(adk.CancelImmediate)
+		out.ObservedMode = cancelModeName(adk.CancelImmediate)
 		out.Classification = "escalated"
 	}
 	if cancelled.Info.Timeout {
@@ -384,6 +390,21 @@ func projectCancel(cancelled *adk.CancelError) convert.CancelledV1 {
 		out.Classification = "immediate"
 	}
 	return out
+}
+
+func cancelModeName(mode adk.CancelMode) string {
+	switch mode {
+	case adk.CancelImmediate:
+		return "immediate"
+	case adk.CancelAfterChatModel:
+		return "after_chat_model"
+	case adk.CancelAfterToolCalls:
+		return "after_tool_calls"
+	case adk.CancelAfterChatModel | adk.CancelAfterToolCalls:
+		return "after_chat_model_or_tool_calls"
+	default:
+		return "unknown"
+	}
 }
 
 func stringifyRunPath(path []adk.RunStep) string {

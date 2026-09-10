@@ -17,10 +17,14 @@ import (
 )
 
 func agenticProjection(t *testing.T) *convert.AgenticProjection {
+	return agenticProjectionForAttempt(t, "attempt")
+}
+
+func agenticProjectionForAttempt(t *testing.T, attemptID string) *convert.AgenticProjection {
 	t.Helper()
 	id := convert.AgenticIdentityV1{
 		SessionID: "session", ThreadID: "session", RunID: "run", TurnID: "turn",
-		MessageID: "message", AttemptID: "attempt",
+		MessageID: "message", AttemptID: attemptID,
 		AgentPath: []convert.AgentPathSegment{{Name: "root", RunID: "run"}},
 	}
 	projection, err := convert.ToAgenticProjection(
@@ -34,6 +38,41 @@ func agenticProjection(t *testing.T) *convert.AgenticProjection {
 		t.Fatal(err)
 	}
 	return projection
+}
+
+func TestAttemptReplacementMustPrecedeSuccessorOutput(t *testing.T) {
+	t.Parallel()
+	oldProjection := agenticProjectionForAttempt(t, "attempt-old")
+	newProjection := agenticProjectionForAttempt(t, "attempt-new")
+	sink := testsse.NewSink()
+	emit := NewObserverEmitter(t.Context(), sink.Writer(), sink.SSEWriter())
+	receiptFor := func(projection *convert.AgenticProjection) convert.CommitReceiptV1 {
+		return convert.CommitReceiptV1{Revision: "revision", Domain: "projection", Identity: projection.Public.Identity, Digest: projection.Digest}
+	}
+	if !emit.EmitCommittedProjection(oldProjection, receiptFor(oldProjection), DeliveryModeLiveContinuation) {
+		t.Fatalf("old attempt emit failed: %v / %v", emit.Err(), emit.EncErr())
+	}
+	wantPrefix := len(normalizedFrames(t, sink))
+	if emit.EmitCommittedProjection(newProjection, receiptFor(newProjection), DeliveryModeLiveContinuation) {
+		t.Fatal("successor output emitted before replacement")
+	}
+	if got := len(normalizedFrames(t, sink)); got != wantPrefix {
+		t.Fatalf("successor rejection wrote %d frames, want %d", got, wantPrefix)
+	}
+
+	replacement := convert.AttemptReplacedV1{OldAttemptID: "attempt-old", NewAttemptID: "attempt-new", Cause: "retry", Semantics: "replace"}
+	envelope := &convert.AgenticEnvelopeV1{Version: convert.AgenticSchemaVersion, Kind: convert.EnvelopeAttemptReplaced, Identity: oldProjection.Public.Identity, AttemptReplaced: &replacement}
+	digest, err := convert.LifecycleDigestV1(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := convert.CommitReceiptV1{Revision: "revision-2", Domain: "lifecycle", Kind: envelope.Kind, Identity: envelope.Identity, Digest: digest}
+	if !emit.AttemptReplaced(replacement, receipt) {
+		t.Fatalf("replacement emit failed: %v / %v", emit.Err(), emit.EncErr())
+	}
+	if !emit.EmitCommittedProjection(newProjection, receiptFor(newProjection), DeliveryModeLiveContinuation) {
+		t.Fatalf("successor emit failed: %v / %v", emit.Err(), emit.EncErr())
+	}
 }
 
 func TestAgenticSSEPassesPinnedStrictDecoder(t *testing.T) {
@@ -158,6 +197,39 @@ func TestCommittedProjectionRejectsMismatchedReceiptWithoutBytes(t *testing.T) {
 	}
 	if got := normalizedFrames(t, sink); len(got) != 0 {
 		t.Fatalf("frames = %#v, want none", got)
+	}
+}
+
+func TestCommittedLifecycleRejectsFailedCommitWithoutBytes(t *testing.T) {
+	t.Parallel()
+	root := agenticProjection(t).Public.Identity
+	nested := root
+	nested.AgentPath = append(append([]convert.AgentPathSegment(nil), root.AgentPath...), convert.AgentPathSegment{Name: "research", RunID: "sub-run"})
+	tests := []struct {
+		name string
+		call func(*Emitter) bool
+	}{
+		{"pause", func(e *Emitter) bool {
+			return e.Paused(convert.PausedV1{Targets: []convert.InterruptTargetV1{{ID: "interrupt", Address: "agent:root"}}}, convert.CommitReceiptV1{Revision: "failed", Domain: "lifecycle", Kind: convert.EnvelopePaused, Identity: root, Digest: "not-committed"})
+		}},
+		{"cancellation", func(e *Emitter) bool {
+			return e.Cancelled(convert.CancelledV1{RequestedMode: "immediate", ObservedMode: "immediate", Classification: "immediate"}, convert.CommitReceiptV1{Revision: "failed", Domain: "lifecycle", Kind: convert.EnvelopeCancelled, Identity: root, Digest: "not-committed"})
+		}},
+		{"subagent completion", func(e *Emitter) bool {
+			return e.SubagentFinishedCommitted(convert.LifecycleFactV1{}, convert.CommitReceiptV1{Revision: "failed", Domain: "lifecycle", Kind: convert.EnvelopeSubagentFinished, Identity: nested, Digest: "not-committed"})
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			sink := testsse.NewSink()
+			emit := NewObserverEmitter(t.Context(), sink.Writer(), sink.SSEWriter())
+			if tc.call(emit) {
+				t.Fatal("failed commit emitted")
+			}
+			if got := normalizedFrames(t, sink); len(got) != 0 {
+				t.Fatalf("frames = %#v, want none", got)
+			}
+		})
 	}
 }
 

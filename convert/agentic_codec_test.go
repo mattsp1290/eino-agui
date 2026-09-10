@@ -217,6 +217,20 @@ func TestEnvelopeStrictDecodeRejectsAmbiguousContentUnion(t *testing.T) {
 	}
 }
 
+func TestAttemptReplacementRequiresCauseAndSemantics(t *testing.T) {
+	t.Parallel()
+	id := testIdentity()
+	for _, replacement := range []AttemptReplacedV1{
+		{OldAttemptID: "old", NewAttemptID: "new", Semantics: "replace"},
+		{OldAttemptID: "old", NewAttemptID: "new", Cause: "retry"},
+	} {
+		envelope := &AgenticEnvelopeV1{Version: AgenticSchemaVersion, Kind: EnvelopeAttemptReplaced, Identity: id, AttemptReplaced: &replacement}
+		if _, err := LifecycleDigestV1(envelope); err == nil {
+			t.Fatalf("replacement %#v unexpectedly validated", replacement)
+		}
+	}
+}
+
 func TestServerJSONRejectsCyclesAndNonFiniteNumbers(t *testing.T) {
 	t.Parallel()
 	cyclic := map[string]any{}

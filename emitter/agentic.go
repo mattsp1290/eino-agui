@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/encoding/sse"
@@ -39,7 +40,14 @@ func (e *Emitter) EmitTransientBlock(block convert.TransientBlock) bool {
 	if !e.prevalidate([]events.Event{block.Event}) {
 		return false
 	}
-	return e.Emit(block.Event)
+	if !e.allowAgenticOutput(block.Identity) {
+		return false
+	}
+	if !e.Emit(block.Event) {
+		return false
+	}
+	e.recordAgenticOutput(block.Identity)
+	return true
 }
 
 func (e *Emitter) EmitCommittedProjection(projection *convert.AgenticProjection, receipt convert.CommitReceiptV1, mode DeliveryMode) bool {
@@ -57,6 +65,9 @@ func (e *Emitter) EmitCommittedProjection(projection *convert.AgenticProjection,
 	}
 	if len(projection.Blocks) != len(projection.Public.ContentBlocks) {
 		e.recordEncodingError(errors.New("agentic projection block cache does not match public projection"))
+		return false
+	}
+	if !e.allowAgenticOutput(projection.Public.Identity) {
 		return false
 	}
 	groups := make([][]events.Event, len(projection.Blocks))
@@ -96,6 +107,7 @@ func (e *Emitter) EmitCommittedProjection(projection *convert.AgenticProjection,
 			}
 		}
 	}
+	e.recordAgenticOutput(projection.Public.Identity)
 	return true
 }
 
@@ -106,7 +118,20 @@ func (e *Emitter) TurnFinished(input convert.TurnFinishedV1, receipt convert.Com
 	return e.emitLifecycle(convert.EnvelopeTurnFinished, receipt, func(v *convert.AgenticEnvelopeV1) { v.Lifecycle = &input })
 }
 func (e *Emitter) AttemptReplaced(input convert.AttemptReplacedV1, receipt convert.CommitReceiptV1) bool {
-	return e.emitLifecycle(convert.EnvelopeAttemptReplaced, receipt, func(v *convert.AgenticEnvelopeV1) { v.AttemptReplaced = &input })
+	key := agenticMessageKey(receipt.Identity)
+	if key == "" {
+		e.recordEncodingError(errors.New("attempt replacement requires an owning message identity"))
+		return false
+	}
+	if current := e.agenticAttempt(key); current != "" && current != input.OldAttemptID {
+		e.recordEncodingError(errors.New("attempt replacement old attempt does not match emitted output"))
+		return false
+	}
+	if !e.emitLifecycle(convert.EnvelopeAttemptReplaced, receipt, func(v *convert.AgenticEnvelopeV1) { v.AttemptReplaced = &input }) {
+		return false
+	}
+	e.setAgenticAttempt(key, input.NewAttemptID)
+	return true
 }
 func (e *Emitter) Paused(input convert.PausedV1, receipt convert.CommitReceiptV1) bool {
 	return e.emitLifecycle(convert.EnvelopePaused, receipt, func(v *convert.AgenticEnvelopeV1) { v.Paused = &input })
@@ -226,4 +251,56 @@ func (e *Emitter) recordEncodingError(err error) {
 	if err != nil && e.encErr == nil {
 		e.encErr = err
 	}
+}
+
+func (e *Emitter) allowAgenticOutput(identity convert.AgenticIdentityV1) bool {
+	key := agenticMessageKey(identity)
+	if key == "" {
+		e.recordEncodingError(errors.New("agentic output requires an owning message identity"))
+		return false
+	}
+	if current := e.agenticAttempt(key); current != "" && current != identity.AttemptID {
+		e.recordEncodingError(errors.New("successor attempt output requires a preceding committed replacement fact"))
+		return false
+	}
+	return true
+}
+
+func (e *Emitter) recordAgenticOutput(identity convert.AgenticIdentityV1) {
+	e.setAgenticAttempt(agenticMessageKey(identity), identity.AttemptID)
+}
+
+func (e *Emitter) agenticAttempt(key string) string {
+	if e.agenticAttempts == nil {
+		return ""
+	}
+	return e.agenticAttempts[key]
+}
+
+func (e *Emitter) setAgenticAttempt(key, attemptID string) {
+	if key == "" || attemptID == "" {
+		return
+	}
+	if e.agenticAttempts == nil {
+		e.agenticAttempts = make(map[string]string)
+	}
+	e.agenticAttempts[key] = attemptID
+}
+
+func agenticMessageKey(identity convert.AgenticIdentityV1) string {
+	if identity.SessionID == "" || identity.RunID == "" || identity.TurnID == "" || identity.MessageID == "" {
+		return ""
+	}
+	var key strings.Builder
+	for _, value := range []string{identity.SessionID, identity.RunID, identity.TurnID, identity.MessageID} {
+		key.WriteString(value)
+		key.WriteByte(0)
+	}
+	for _, segment := range identity.AgentPath {
+		key.WriteString(segment.Name)
+		key.WriteByte(0)
+		key.WriteString(segment.RunID)
+		key.WriteByte(0)
+	}
+	return key.String()
 }

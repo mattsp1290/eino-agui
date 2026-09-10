@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"sync"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/cloudwego/eino/components/model"
@@ -98,7 +99,6 @@ func StreamAgenticTurn(ctx context.Context, am model.AgenticModel, messages []*s
 	if reader == nil {
 		return nil, errors.New("agentic model returned a nil stream")
 	}
-	defer reader.Close()
 	return drainAgenticReader(ctx, reader, ids, blocks, config)
 }
 
@@ -122,11 +122,11 @@ type agenticDrain struct {
 
 func drainAgenticReader(ctx context.Context, reader *schema.StreamReader[*schema.AgenticMessage], ids AgenticStreamIdentity, resolver BlockContextResolver, config agenticConfig) (*AgenticResult, error) {
 	state := &agenticDrain{result: &AgenticResult{}, base: streamIdentity(ids), resolver: resolver, config: config, indexed: map[int]blockLedger{}}
+	var closeOnce sync.Once
+	closeReader := func() { closeOnce.Do(reader.Close) }
+	defer closeReader()
 	for {
-		if err := ctx.Err(); err != nil {
-			return state.finish(err)
-		}
-		chunk, recvErr := reader.Recv()
+		chunk, recvErr := receiveAgenticChunk(ctx, reader, closeReader)
 		if errors.Is(recvErr, io.EOF) {
 			return state.finish(nil)
 		}
@@ -136,6 +136,27 @@ func drainAgenticReader(ctx context.Context, reader *schema.StreamReader[*schema
 		if err := state.apply(chunk); err != nil {
 			return state.finish(err)
 		}
+	}
+}
+
+type agenticReceive struct {
+	chunk *schema.AgenticMessage
+	err   error
+}
+
+func receiveAgenticChunk(ctx context.Context, reader *schema.StreamReader[*schema.AgenticMessage], closeReader func()) (*schema.AgenticMessage, error) {
+	received := make(chan agenticReceive, 1)
+	go func() {
+		chunk, err := reader.Recv()
+		received <- agenticReceive{chunk: chunk, err: err}
+	}()
+	select {
+	case item := <-received:
+		return item.chunk, item.err
+	case <-ctx.Done():
+		closeReader()
+		<-received
+		return nil, ctx.Err()
 	}
 }
 

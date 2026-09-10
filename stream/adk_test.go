@@ -80,13 +80,34 @@ func TestDrainAgenticEventsProjectsInterruptWithoutPrivateInfo(t *testing.T) {
 
 func TestDrainAgenticEventsClassifiesCancellation(t *testing.T) {
 	t.Parallel()
-	event := &adk.TypedAgentEvent[*schema.AgenticMessage]{Err: &adk.CancelError{Info: &adk.AgentCancelInfo{Mode: adk.CancelImmediate}}}
-	result, err := DrainAgenticEvents(t.Context(), sourceFromEvents(t, event), testEventResolver{})
-	if err != nil {
-		t.Fatalf("cancellation should be an observation: %v", err)
+	tests := []struct {
+		name           string
+		info           *adk.AgentCancelInfo
+		requested      string
+		observed       string
+		classification string
+	}{
+		{"immediate", &adk.AgentCancelInfo{Mode: adk.CancelImmediate}, "immediate", "immediate", "immediate"},
+		{"chat model safe point", &adk.AgentCancelInfo{Mode: adk.CancelAfterChatModel}, "after_chat_model", "after_chat_model", "safe_point"},
+		{"tool safe point", &adk.AgentCancelInfo{Mode: adk.CancelAfterToolCalls}, "after_tool_calls", "after_tool_calls", "safe_point"},
+		{"graceful escalation", &adk.AgentCancelInfo{Mode: adk.CancelAfterChatModel, Escalated: true}, "after_chat_model", "immediate", "escalated"},
+		{"timeout escalation", &adk.AgentCancelInfo{Mode: adk.CancelAfterToolCalls, Escalated: true, Timeout: true}, "after_tool_calls", "immediate", "timeout"},
 	}
-	if len(result.Cancellations) != 1 || result.Cancellations[0].Classification != "immediate" {
-		t.Fatalf("cancellations = %#v", result.Cancellations)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			event := &adk.TypedAgentEvent[*schema.AgenticMessage]{Err: &adk.CancelError{Info: tc.info}}
+			result, err := DrainAgenticEvents(t.Context(), sourceFromEvents(t, event), testEventResolver{})
+			if err != nil {
+				t.Fatalf("cancellation should be an observation: %v", err)
+			}
+			if len(result.Cancellations) != 1 {
+				t.Fatalf("cancellations = %#v", result.Cancellations)
+			}
+			got := result.Cancellations[0]
+			if got.RequestedMode != tc.requested || got.ObservedMode != tc.observed || got.Classification != tc.classification {
+				t.Fatalf("cancellation = %#v", got)
+			}
+		})
 	}
 }
 

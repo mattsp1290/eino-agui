@@ -995,8 +995,13 @@ func validateEnvelope(value *AgenticEnvelopeV1, verifyDigest bool) error {
 			return fmt.Errorf("agentic envelope content block: %w", err)
 		}
 	}
-	if value.AttemptReplaced != nil && (value.AttemptReplaced.OldAttemptID == "" || value.AttemptReplaced.NewAttemptID == "" || value.AttemptReplaced.OldAttemptID == value.AttemptReplaced.NewAttemptID) {
-		return errors.New("attempt replacement requires distinct old and new attempt IDs")
+	if value.AttemptReplaced != nil {
+		if value.AttemptReplaced.OldAttemptID == "" || value.AttemptReplaced.NewAttemptID == "" || value.AttemptReplaced.OldAttemptID == value.AttemptReplaced.NewAttemptID {
+			return errors.New("attempt replacement requires distinct old and new attempt IDs")
+		}
+		if value.AttemptReplaced.Cause == "" || value.AttemptReplaced.Semantics == "" {
+			return errors.New("attempt replacement requires cause and semantics")
+		}
 	}
 	if value.Paused != nil {
 		if err := validateInterruptTargets(value.Paused.Targets); err != nil {

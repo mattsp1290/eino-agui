@@ -2,10 +2,13 @@ package stream
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"reflect"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/cloudwego/eino/components/model"
@@ -19,11 +22,27 @@ type readerAgenticModel struct {
 	reader func() *schema.StreamReader[*schema.AgenticMessage]
 }
 
+type contextClosingAgenticModel struct {
+	reader *schema.StreamReader[*schema.AgenticMessage]
+	writer *schema.StreamWriter[*schema.AgenticMessage]
+}
+
 func (m readerAgenticModel) Generate(context.Context, []*schema.AgenticMessage, ...model.Option) (*schema.AgenticMessage, error) {
 	return nil, errors.New("not used")
 }
 func (m readerAgenticModel) Stream(context.Context, []*schema.AgenticMessage, ...model.Option) (*schema.StreamReader[*schema.AgenticMessage], error) {
 	return m.reader(), nil
+}
+
+func (m contextClosingAgenticModel) Generate(context.Context, []*schema.AgenticMessage, ...model.Option) (*schema.AgenticMessage, error) {
+	return nil, errors.New("not used")
+}
+func (m contextClosingAgenticModel) Stream(ctx context.Context, _ []*schema.AgenticMessage, _ ...model.Option) (*schema.StreamReader[*schema.AgenticMessage], error) {
+	go func() {
+		<-ctx.Done()
+		m.writer.Close()
+	}()
+	return m.reader, nil
 }
 
 type testBlockResolver map[int]convert.AgenticBlockContext
@@ -42,6 +61,17 @@ type recordingSink struct {
 	detached  int
 	detachErr error
 }
+
+type notifyingSink struct {
+	notified chan struct{}
+	once     sync.Once
+}
+
+func (s *notifyingSink) Emit(events.Event) error {
+	s.once.Do(func() { close(s.notified) })
+	return nil
+}
+func (s *notifyingSink) Detach(error) {}
 
 func (s *recordingSink) Emit(event events.Event) error {
 	if s.failAt > 0 && len(s.events)+1 == s.failAt {
@@ -181,6 +211,107 @@ func TestStreamAgenticTurnEnforcesChunkLimit(t *testing.T) {
 	limits.MaxStreamChunks = 1
 	result, err := StreamAgenticTurn(t.Context(), testmodel.NewAgenticReplayModel(testmodel.AgenticTextChunks(0, "one", "two")), nil, agenticIDs(), testBlockResolver{0: {BlockID: "text"}}, WithProjectionLimits(limits))
 	if err == nil || result == nil || !result.Partial || result.PublicProjection != nil {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
+func TestStreamAgenticTurnCancellationUnblocksAndClosesReader(t *testing.T) {
+	t.Parallel()
+	reader, writer := schema.Pipe[*schema.AgenticMessage](1)
+	if closed := writer.Send(testmodel.AgenticTextChunks(0, "partial")[0], nil); closed {
+		t.Fatal("reader closed before drain")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	sink := &notifyingSink{notified: make(chan struct{})}
+	done := make(chan struct{})
+	var result *AgenticResult
+	var err error
+	go func() {
+		defer close(done)
+		result, err = StreamAgenticTurn(ctx, contextClosingAgenticModel{reader: reader, writer: writer}, nil, agenticIDs(), testBlockResolver{0: {BlockID: "text"}}, WithTransientSink(sink))
+	}()
+	select {
+	case <-sink.notified:
+	case <-time.After(time.Second):
+		t.Fatal("first chunk was not drained")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("cancellation did not unblock the reader")
+	}
+	if !errors.Is(err, context.Canceled) || result == nil || !result.Partial || result.Terminal != AgenticTerminalCancelled {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if closed := writer.Send(testmodel.AgenticTextChunks(0, "late")[0], nil); !closed {
+		t.Fatal("reader was not closed after cancellation")
+	}
+}
+
+func TestStreamAgenticTurnEnforcesBlockAndByteLimits(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		chunks   []*schema.AgenticMessage
+		limits   func() convert.ProjectionLimits
+		resolver testBlockResolver
+	}{
+		{
+			name:   "block count",
+			chunks: append(testmodel.AgenticTextChunks(0, "one"), testmodel.AgenticTextChunks(1, "two")...),
+			limits: func() convert.ProjectionLimits {
+				limits := convert.DefaultProjectionLimits()
+				limits.MaxBlocks = 1
+				return limits
+			},
+			resolver: testBlockResolver{0: {BlockID: "one"}, 1: {BlockID: "two"}},
+		},
+		{
+			name:   "block bytes",
+			chunks: testmodel.AgenticTextChunks(0, "this exceeds the configured block byte limit"),
+			limits: func() convert.ProjectionLimits {
+				limits := convert.DefaultProjectionLimits()
+				limits.MaxBlockBytes = 8
+				return limits
+			},
+			resolver: testBlockResolver{0: {BlockID: "text"}},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := StreamAgenticTurn(t.Context(), testmodel.NewAgenticReplayModel(tc.chunks), nil, agenticIDs(), tc.resolver, WithProjectionLimits(tc.limits()))
+			if err == nil || result == nil || !result.Partial || result.PublicProjection != nil {
+				t.Fatalf("result=%#v err=%v", result, err)
+			}
+		})
+	}
+}
+
+func TestStreamAgenticTurnDoesNotMutateInput(t *testing.T) {
+	t.Parallel()
+	input := []*schema.AgenticMessage{{Role: schema.AgenticRoleTypeUser, ContentBlocks: []*schema.ContentBlock{schema.NewContentBlock(&schema.UserInputText{Text: "unchanged"})}}}
+	before, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = StreamAgenticTurn(t.Context(), testmodel.NewAgenticReplayModel(testmodel.AgenticTextChunks(0, "answer")), input, agenticIDs(), testBlockResolver{0: {BlockID: "text"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("input mutated:\nbefore %s\nafter  %s", before, after)
+	}
+}
+
+func TestStreamAgenticTurnRejectsNilChunk(t *testing.T) {
+	t.Parallel()
+	result, err := StreamAgenticTurn(t.Context(), testmodel.NewAgenticReplayModel([]*schema.AgenticMessage{nil}), nil, agenticIDs(), testBlockResolver{})
+	if err == nil || result == nil || !result.Partial {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
 }
