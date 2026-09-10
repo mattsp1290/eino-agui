@@ -684,6 +684,23 @@ func TestCommittedProjectionPrevalidatesEveryBlockBeforeBytes(t *testing.T) {
 	}
 }
 
+func TestCommittedGroupsRejectLaterSDKValidationErrorBeforeBytes(t *testing.T) {
+	t.Parallel()
+	sink := testsse.NewSink()
+	emit := NewObserverEmitter(t.Context(), sink.Writer(), sink.SSEWriter())
+	valid := events.NewTextMessageStartEvent("message", events.WithRole("assistant"))
+	invalid := events.NewTextMessageStartEvent("message", events.WithRole("not-an-ag-ui-role"))
+	if emit.emitAgenticGroups([][]events.Event{{valid}, {invalid}}) {
+		t.Fatal("invalid later SDK event emitted")
+	}
+	if emit.EncErr() == nil {
+		t.Fatal("SDK validation error was not recorded")
+	}
+	if got := normalizedFrames(t, sink); len(got) != 0 {
+		t.Fatalf("frames = %#v, want none", got)
+	}
+}
+
 func TestTurnFinishedIsCustomOnlyAndRunTerminalRequiresSettlement(t *testing.T) {
 	t.Parallel()
 	id := agenticProjection(t).Public.Identity

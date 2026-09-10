@@ -164,9 +164,6 @@ func (e *Emitter) EmitCommittedProjection(projection *convert.AgenticProjection,
 			}
 			group = append(native, custom)
 		}
-		if !e.prevalidate(group) {
-			return false
-		}
 		groups[i] = group
 	}
 	if projection.Public.ResponseMeta != nil {
@@ -180,17 +177,10 @@ func (e *Emitter) EmitCommittedProjection(projection *convert.AgenticProjection,
 		custom := events.NewCustomEvent(convert.AgenticCustomEventName, events.WithValue(&envelope))
 		custom.GetBaseEvent().Metadata = map[string]any{convert.AgenticCustomEventName: envelope.Identity}
 		group := []events.Event{custom}
-		if !e.prevalidate(group) {
-			return false
-		}
 		groups = append(groups, group)
 	}
-	for _, group := range groups {
-		for _, event := range group {
-			if !e.Emit(event) {
-				return false
-			}
-		}
+	if !e.emitAgenticGroups(groups) {
+		return false
 	}
 	e.recordAgenticOutput(projection.Public.Identity)
 	e.recordAgenticReceipt(receipt)
@@ -348,13 +338,8 @@ func (e *Emitter) emitLifecycleWithNative(kind convert.AgenticEnvelopeKind, rece
 	for _, item := range group {
 		item.GetBaseEvent().Metadata = map[string]any{convert.AgenticCustomEventName: envelope.Identity}
 	}
-	if !e.prevalidate(group) {
+	if !e.emitAgenticGroups([][]events.Event{group}) {
 		return false
-	}
-	for _, item := range group {
-		if !e.Emit(item) {
-			return false
-		}
 	}
 	e.recordAgenticReceipt(receipt)
 	return true
@@ -381,6 +366,22 @@ func (e *Emitter) prevalidate(group []events.Event) bool {
 		if _, err := event.ToJSON(); err != nil {
 			e.recordEncodingError(err)
 			return false
+		}
+	}
+	return true
+}
+
+func (e *Emitter) emitAgenticGroups(groups [][]events.Event) bool {
+	for _, group := range groups {
+		if !e.prevalidate(group) {
+			return false
+		}
+	}
+	for _, group := range groups {
+		for _, event := range group {
+			if !e.Emit(event) {
+				return false
+			}
 		}
 	}
 	return true
