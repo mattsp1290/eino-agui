@@ -212,6 +212,34 @@ func TestDrainAgenticEventsRejectsAmbiguousInterruptTargets(t *testing.T) {
 	}
 }
 
+func TestDrainAgenticEventsRejectsInvalidApprovalCorrelation(t *testing.T) {
+	t.Parallel()
+	firstAddress := adk.Address{{Type: adk.AddressSegmentAgent, ID: "root"}, {Type: adk.AddressSegmentTool, ID: "first"}}
+	secondAddress := adk.Address{{Type: adk.AddressSegmentAgent, ID: "root"}, {Type: adk.AddressSegmentTool, ID: "second"}}
+	event := &adk.TypedAgentEvent[*schema.AgenticMessage]{Action: &adk.AgentAction{Interrupted: &adk.InterruptInfo{InterruptContexts: []*adk.InterruptCtx{
+		{ID: "first", Address: firstAddress},
+		{ID: "second", Address: secondAddress},
+	}}}}
+	for _, tc := range []struct {
+		name        string
+		correlation *convert.ApprovalInterruptCorrelation
+	}{
+		{name: "missing approval ID", correlation: &convert.ApprovalInterruptCorrelation{InterruptTargetID: "first", InterruptAddress: firstAddress.String()}},
+		{name: "unknown target", correlation: &convert.ApprovalInterruptCorrelation{ApprovalRequestID: "approval", InterruptTargetID: "missing", InterruptAddress: firstAddress.String()}},
+		{name: "swapped target pair", correlation: &convert.ApprovalInterruptCorrelation{ApprovalRequestID: "approval", InterruptTargetID: "first", InterruptAddress: secondAddress.String()}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resolver := testEventResolverFunc(func(AgentEventCoordinates) (AgentEventResolution, error) {
+				return AgentEventResolution{Identity: agenticIDs(), Blocks: testBlockResolver{}, PauseID: "pause", Correlation: tc.correlation}, nil
+			})
+			result, err := DrainAgenticEvents(t.Context(), sourceFromEvents(t, event), resolver)
+			if err == nil || result == nil || !result.Partial || len(result.Interrupts) != 0 {
+				t.Fatalf("result=%#v err=%v", result, err)
+			}
+		})
+	}
+}
+
 func TestDrainAgenticEventsClassifiesCancellation(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

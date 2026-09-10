@@ -854,6 +854,9 @@ func TestCommittedPauseResumeOrderingAndTargets(t *testing.T) {
 		t.Fatalf("partial resume failed: %v / %v", emit.Err(), emit.EncErr())
 	}
 	remaining := []convert.InterruptTargetV1{targets[0], targets[2]}
+	if emitResume(emit, convert.ResumedV1{PauseID: "pause", Targets: remaining, Full: true, NewTurnID: "turn-3", NewAttemptID: "attempt-3"}) {
+		t.Fatal("resume inferred an omitted approval correlation")
+	}
 	wrongCorrelation := *correlation
 	wrongCorrelation.ApprovalRequestID = "different"
 	if emitResume(emit, convert.ResumedV1{PauseID: "pause", Targets: remaining, Full: true, NewTurnID: "turn-3", NewAttemptID: "attempt-3", Correlation: &wrongCorrelation}) {
