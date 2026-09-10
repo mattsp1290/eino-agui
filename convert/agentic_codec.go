@@ -156,6 +156,9 @@ func projectBlock(block *schema.ContentBlock, bc AgenticBlockContext, base Agent
 	if !roleAllowsBlock(role, block.Type) {
 		return PublicContentBlock{}, projectErr(ordinal, "type", "is incompatible with message role")
 	}
+	if bc.ApprovalInterruptCorrelation != nil && block.Type != schema.ContentBlockTypeMCPToolApprovalResponse {
+		return PublicContentBlock{}, projectErr(ordinal, "context", "approval interrupt correlation is only valid for MCP approval responses")
+	}
 	id := cloneIdentity(base)
 	id.BlockID = bc.BlockID
 	out := PublicContentBlock{Type: block.Type, Identity: id}
@@ -283,6 +286,16 @@ func projectBlock(block *schema.ContentBlock, bc AgenticBlockContext, base Agent
 		if v.ApprovalRequestID == "" || bc.ExpectedApprovalRequestID == "" || v.ApprovalRequestID != bc.ExpectedApprovalRequestID {
 			err = errors.New("approval request ID does not match caller context")
 			break
+		}
+		if correlation := bc.ApprovalInterruptCorrelation; correlation != nil {
+			if correlation.ApprovalRequestID == "" || correlation.InterruptTargetID == "" || correlation.InterruptAddress == "" {
+				err = errors.New("approval interrupt correlation fields are required and remain distinct")
+				break
+			}
+			if correlation.ApprovalRequestID != v.ApprovalRequestID {
+				err = errors.New("approval interrupt correlation does not match approval response")
+				break
+			}
 		}
 		out.MCPApprovalResponse = &PublicMCPApprovalResponse{v.ApprovalRequestID, v.Approve, v.Reason}
 	default:

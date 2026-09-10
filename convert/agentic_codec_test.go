@@ -127,6 +127,69 @@ func TestProjectAgenticMessageAllContentKinds(t *testing.T) {
 	}
 }
 
+func TestApprovalResponseCorrelationIsValidationOnlyAndTypeScoped(t *testing.T) {
+	t.Parallel()
+	response := schema.NewContentBlock(&schema.MCPToolApprovalResponse{ApprovalRequestID: "approval", Approve: true})
+	correlation := &ApprovalInterruptCorrelation{
+		ApprovalRequestID: "approval",
+		InterruptTargetID: "interrupt",
+		InterruptAddress:  "agent:root",
+	}
+	projection, err := ProjectAgenticMessage(
+		&schema.AgenticMessage{Role: schema.AgenticRoleTypeUser, ContentBlocks: []*schema.ContentBlock{response}},
+		testContext(AgenticBlockContext{
+			BlockID:                      "block",
+			ExpectedApprovalRequestID:    "approval",
+			ApprovalInterruptCorrelation: correlation,
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(projection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte("interruptTargetId")) || bytes.Contains(encoded, []byte("interruptAddress")) {
+		t.Fatalf("validation-only correlation leaked into projection: %s", encoded)
+	}
+
+	tests := []struct {
+		name        string
+		role        schema.AgenticRoleType
+		block       *schema.ContentBlock
+		correlation ApprovalInterruptCorrelation
+	}{
+		{
+			name: "missing native approval ID", role: schema.AgenticRoleTypeUser, block: response,
+			correlation: ApprovalInterruptCorrelation{InterruptTargetID: "interrupt", InterruptAddress: "agent:root"},
+		},
+		{
+			name: "mismatched native approval ID", role: schema.AgenticRoleTypeUser, block: response,
+			correlation: ApprovalInterruptCorrelation{ApprovalRequestID: "different", InterruptTargetID: "interrupt", InterruptAddress: "agent:root"},
+		},
+		{
+			name: "non-response block", role: schema.AgenticRoleTypeUser,
+			block: schema.NewContentBlock(&schema.UserInputText{Text: "hello"}), correlation: *correlation,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ProjectAgenticMessage(
+				&schema.AgenticMessage{Role: tc.role, ContentBlocks: []*schema.ContentBlock{tc.block}},
+				testContext(AgenticBlockContext{
+					BlockID:                      "block",
+					ExpectedApprovalRequestID:    "approval",
+					ApprovalInterruptCorrelation: &tc.correlation,
+				}),
+			)
+			if err == nil {
+				t.Fatal("invalid approval interrupt correlation was accepted")
+			}
+		})
+	}
+}
+
 func TestProjectFunctionResultAllNestedKinds(t *testing.T) {
 	t.Parallel()
 	parts := []*schema.FunctionToolResultContentBlock{
