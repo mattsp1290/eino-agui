@@ -359,8 +359,98 @@ func TestCommittedMultiEventBlockReportsEveryTransportFailureBoundary(t *testing
 			if frames := bytes.Count(transport.buffer.Bytes(), []byte("\n\n")); frames != allowed {
 				t.Fatalf("complete prefix frames=%d, want %d\n%s", frames, allowed, transport.buffer.String())
 			}
+			if len(emit.agenticReceipts) != 0 {
+				t.Fatal("partial transport prefix consumed the commit receipt")
+			}
+			if len(emit.agenticAttempts) != 0 {
+				t.Fatal("partial transport prefix advanced the authoritative attempt")
+			}
 		})
 	}
+}
+
+func TestCommittedLifecycleTransportFailureDoesNotAdvanceState(t *testing.T) {
+	t.Parallel()
+	id := agenticProjection(t).Public.Identity
+	receiptFor := func(revision string, kind convert.AgenticEnvelopeKind, build func(*convert.AgenticEnvelopeV1)) convert.CommitReceiptV1 {
+		envelope := &convert.AgenticEnvelopeV1{Version: convert.AgenticSchemaVersion, Kind: kind, Identity: id}
+		build(envelope)
+		digest, err := convert.LifecycleDigestV1(envelope)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return convert.CommitReceiptV1{Revision: revision, Domain: "lifecycle", Kind: kind, Identity: id, Digest: digest}
+	}
+
+	t.Run("native prefix does not consume receipt", func(t *testing.T) {
+		transport := &failAfterEventWrites{allowed: 1}
+		emit := NewObserverEmitter(t.Context(), bufio.NewWriter(transport), sse.NewSSEWriter())
+		fact := convert.LifecycleFactV1{}
+		receipt := receiptFor("run-start", convert.EnvelopeRunStarted, func(envelope *convert.AgenticEnvelopeV1) { envelope.Lifecycle = &fact })
+		if emit.RunStartedCommitted(fact, receipt) {
+			t.Fatal("partial lifecycle transport reported success")
+		}
+		if transport.writes != 1 || len(emit.agenticReceipts) != 0 {
+			t.Fatalf("writes=%d receipts=%d, want one native prefix and no consumed receipt", transport.writes, len(emit.agenticReceipts))
+		}
+	})
+
+	t.Run("replacement failure does not authorize successor", func(t *testing.T) {
+		projection := agenticProjection(t)
+		transport := &failAfterEventWrites{allowed: len(projection.Blocks)}
+		emit := NewObserverEmitter(t.Context(), bufio.NewWriter(transport), sse.NewSSEWriter())
+		projectionReceipt := convert.CommitReceiptV1{Revision: "projection", Domain: "projection", Identity: id, Digest: projection.Digest}
+		if !emit.EmitCommittedProjection(projection, projectionReceipt, DeliveryModeLiveContinuation) {
+			t.Fatalf("projection setup failed: %v / %v", emit.Err(), emit.EncErr())
+		}
+		replacement := convert.AttemptReplacedV1{OldAttemptID: id.AttemptID, NewAttemptID: "attempt-new", Cause: "retry", Semantics: "replace"}
+		receipt := receiptFor("replace", convert.EnvelopeAttemptReplaced, func(envelope *convert.AgenticEnvelopeV1) { envelope.AttemptReplaced = &replacement })
+		if emit.AttemptReplaced(replacement, receipt) {
+			t.Fatal("failed replacement transport reported success")
+		}
+		if got := emit.agenticAttempt(agenticMessageKey(id)); got != id.AttemptID {
+			t.Fatalf("authoritative attempt=%q, want prior attempt %q", got, id.AttemptID)
+		}
+		if len(emit.agenticReceipts) != 1 {
+			t.Fatalf("receipts=%d, want only the prior projection receipt", len(emit.agenticReceipts))
+		}
+		if _, consumed := emit.agenticReceipts[agenticReceiptKey(receipt)]; consumed {
+			t.Fatal("failed replacement consumed its receipt")
+		}
+	})
+
+	t.Run("pause and resume failures preserve prior state", func(t *testing.T) {
+		targets := []convert.InterruptTargetV1{{ID: "one", Address: "agent:root;node:one"}, {ID: "two", Address: "agent:root;node:two"}}
+		pause := convert.PausedV1{PauseID: "pause", Targets: targets}
+		pauseReceipt := receiptFor("pause", convert.EnvelopePaused, func(envelope *convert.AgenticEnvelopeV1) { envelope.Paused = &pause })
+
+		pauseFailure := &failAfterEventWrites{}
+		failedPause := NewObserverEmitter(t.Context(), bufio.NewWriter(pauseFailure), sse.NewSSEWriter())
+		if failedPause.Paused(pause, pauseReceipt) {
+			t.Fatal("failed pause transport reported success")
+		}
+		if len(failedPause.agenticPauses) != 0 || len(failedPause.agenticReceipts) != 0 {
+			t.Fatalf("pauses=%d receipts=%d, want no state advance", len(failedPause.agenticPauses), len(failedPause.agenticReceipts))
+		}
+
+		resumeFailure := &failAfterEventWrites{allowed: 1}
+		emit := NewObserverEmitter(t.Context(), bufio.NewWriter(resumeFailure), sse.NewSSEWriter())
+		if !emit.Paused(pause, pauseReceipt) {
+			t.Fatalf("pause setup failed: %v / %v", emit.Err(), emit.EncErr())
+		}
+		resume := convert.ResumedV1{PauseID: "pause", Targets: targets[:1], NewTurnID: "turn-2", NewAttemptID: "attempt-2"}
+		resumeReceipt := receiptFor("resume", convert.EnvelopeResumed, func(envelope *convert.AgenticEnvelopeV1) { envelope.Resumed = &resume })
+		if emit.Resumed(resume, resumeReceipt) {
+			t.Fatal("failed resume transport reported success")
+		}
+		stored, ok := emit.agenticPauses[agenticPauseKey(id, pause.PauseID)]
+		if !ok || !reflect.DeepEqual(stored.targets, targets) {
+			t.Fatalf("failed resume changed pause state: %#v", stored)
+		}
+		if _, consumed := emit.agenticReceipts[agenticReceiptKey(resumeReceipt)]; consumed {
+			t.Fatal("failed resume consumed its receipt")
+		}
+	})
 }
 
 func TestCommittedProjectionEmitsResponseMetadata(t *testing.T) {
