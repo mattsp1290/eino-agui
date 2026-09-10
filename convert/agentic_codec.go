@@ -475,6 +475,9 @@ func validateToolJSONSchema(data json.RawMessage, limits ProjectionLimits) error
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return errors.New("cannot decode JSON schema")
 	}
+	if _, ok := value.(map[string]any); !ok {
+		return errors.New("JSON schema root must be an object")
+	}
 	entries := 0
 	if err := walkJSON(reflect.ValueOf(value), 1, limits, &entries, map[visit]bool{}); err != nil {
 		return fmt.Errorf("JSON schema: %w", err)
@@ -579,6 +582,9 @@ func projectMCPList(v *schema.MCPListToolsResult, limits ProjectionLimits) (*Pub
 			b, err := json.Marshal(tool.InputSchema)
 			if err != nil {
 				return nil, errors.New("cannot encode input schema")
+			}
+			if err := validateToolJSONSchema(b, limits); err != nil {
+				return nil, fmt.Errorf("tool %d input schema: %w", i, err)
 			}
 			item.InputSchema = b
 		}
@@ -1248,6 +1254,9 @@ func validatePublicContentBlock(block *PublicContentBlock) error {
 		if len(block.MCPListToolsResult.Tools) > limits.MaxToolDefinitions {
 			return errors.New("MCP tool definition limit exceeded")
 		}
+		if err := validatePublicMCPListTools(block.MCPListToolsResult, limits); err != nil {
+			return err
+		}
 	}
 	if block.ProviderAnnotations != nil && block.Type != schema.ContentBlockTypeAssistantGenText {
 		return errors.New("provider annotations require assistant generated text")
@@ -1518,11 +1527,34 @@ func validatePublicToolDefinition(tool *PublicToolDefinition, limits ProjectionL
 			}
 		}
 	case "json_schema":
-		if tool.Params != nil || len(tool.JSONSchema) == 0 || !json.Valid(tool.JSONSchema) {
+		if tool.Params != nil || len(tool.JSONSchema) == 0 {
 			return errors.New("JSON Schema parameters are invalid")
+		}
+		if err := validateToolJSONSchema(tool.JSONSchema, limits); err != nil {
+			return fmt.Errorf("JSON Schema parameters: %w", err)
 		}
 	default:
 		return errors.New("parameter representation is unknown")
+	}
+	return nil
+}
+
+func validatePublicMCPListTools(result *PublicMCPListToolsResult, limits ProjectionLimits) error {
+	seen := make(map[string]struct{}, len(result.Tools))
+	for i := range result.Tools {
+		tool := &result.Tools[i]
+		if tool.Name == "" {
+			return fmt.Errorf("MCP tool %d name is required", i)
+		}
+		if _, duplicate := seen[tool.Name]; duplicate {
+			return fmt.Errorf("MCP tool %d name is duplicated", i)
+		}
+		seen[tool.Name] = struct{}{}
+		if len(tool.InputSchema) != 0 {
+			if err := validateToolJSONSchema(tool.InputSchema, limits); err != nil {
+				return fmt.Errorf("MCP tool %d input schema: %w", i, err)
+			}
+		}
 	}
 	return nil
 }

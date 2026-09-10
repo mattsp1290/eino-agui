@@ -859,6 +859,99 @@ func TestToolDefinitionCollectionsRejectNilEmptyAndDuplicateEntries(t *testing.T
 	}
 }
 
+func TestMCPListToolSchemasApplyLimits(t *testing.T) {
+	t.Parallel()
+	tool := func(input *jsonschema.Schema) *schema.AgenticMessage {
+		return &schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{
+			schema.NewContentBlock(&schema.MCPListToolsResult{ServerLabel: "server", Tools: []*schema.MCPListToolsItem{{Name: "lookup", InputSchema: input}}}),
+		}}
+	}
+	simple := &jsonschema.Schema{Type: "string"}
+	nested := &jsonschema.Schema{Type: "array", Items: &jsonschema.Schema{Type: "string"}}
+	ctx := testContext(AgenticBlockContext{BlockID: "block"})
+	ctx.Limits.MaxJSONDepth = 2
+	if _, err := ProjectAgenticMessage(tool(simple), ctx); err != nil {
+		t.Fatalf("exact MCP schema depth rejected: %v", err)
+	}
+	if _, err := ProjectAgenticMessage(tool(nested), ctx); err == nil {
+		t.Fatal("one-over MCP schema depth was accepted")
+	}
+
+	ctx = testContext(AgenticBlockContext{BlockID: "block"})
+	ctx.Limits.MaxJSONEntries = 4
+	enumSchema := &jsonschema.Schema{Type: "string", Enum: []any{"one", "two"}}
+	if _, err := ProjectAgenticMessage(tool(enumSchema), ctx); err != nil {
+		t.Fatalf("exact MCP schema entry count rejected: %v", err)
+	}
+	ctx.Limits.MaxJSONEntries--
+	if _, err := ProjectAgenticMessage(tool(enumSchema), ctx); err == nil {
+		t.Fatal("one-over MCP schema entry count was accepted")
+	}
+}
+
+func TestPublicToolSchemasRevalidateBeforeDigest(t *testing.T) {
+	t.Parallel()
+	tooDeep := json.RawMessage(strings.Repeat(`{"nested":`, DefaultProjectionLimits().MaxJSONDepth) + `null` + strings.Repeat(`}`, DefaultProjectionLimits().MaxJSONDepth))
+
+	mcpMessage := &schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{
+		schema.NewContentBlock(&schema.MCPListToolsResult{ServerLabel: "server", Tools: []*schema.MCPListToolsItem{
+			{Name: "first", InputSchema: &jsonschema.Schema{Type: "string"}},
+			{Name: "second"},
+		}}),
+	}}
+	projectMCP := func(t *testing.T) *PublicAgenticMessage {
+		t.Helper()
+		projection, err := ProjectAgenticMessage(mcpMessage, testContext(AgenticBlockContext{BlockID: "mcp-list"}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return projection
+	}
+	t.Run("duplicate MCP name", func(t *testing.T) {
+		projection := projectMCP(t)
+		projection.ContentBlocks[0].MCPListToolsResult.Tools[1].Name = "first"
+		if _, err := ProjectionDigestV1(projection); err == nil {
+			t.Fatal("duplicate caller-mutated MCP tool name was accepted")
+		}
+	})
+	t.Run("deep MCP schema", func(t *testing.T) {
+		projection := projectMCP(t)
+		projection.ContentBlocks[0].MCPListToolsResult.Tools[0].InputSchema = tooDeep
+		if _, err := ProjectionDigestV1(projection); err == nil {
+			t.Fatal("deep caller-mutated MCP schema was accepted")
+		}
+	})
+	t.Run("scalar MCP schema", func(t *testing.T) {
+		projection := projectMCP(t)
+		projection.ContentBlocks[0].MCPListToolsResult.Tools[0].InputSchema = json.RawMessage(`true`)
+		if _, err := ProjectionDigestV1(projection); err == nil {
+			t.Fatal("scalar caller-mutated MCP schema was accepted")
+		}
+	})
+
+	searchMessage := &schema.AgenticMessage{Role: schema.AgenticRoleTypeUser, ContentBlocks: []*schema.ContentBlock{
+		schema.NewContentBlock(&schema.ToolSearchFunctionToolResult{CallID: "search", Name: "search", Result: &schema.ToolSearchResult{Tools: []*schema.ToolInfo{
+			{Name: "lookup", ParamsOneOf: schema.NewParamsOneOfByJSONSchema(&jsonschema.Schema{Type: "string"})},
+		}}}),
+	}}
+	projection, err := ProjectAgenticMessage(searchMessage, testContext(AgenticBlockContext{BlockID: "search"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection.ContentBlocks[0].ToolSearchResult.Tools[0].JSONSchema = tooDeep
+	if _, err := ProjectionDigestV1(projection); err == nil {
+		t.Fatal("deep caller-mutated tool-search schema was accepted")
+	}
+	projection, err = ProjectAgenticMessage(searchMessage, testContext(AgenticBlockContext{BlockID: "search"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection.ContentBlocks[0].ToolSearchResult.Tools[0].JSONSchema = json.RawMessage(`null`)
+	if _, err := ProjectionDigestV1(projection); err == nil {
+		t.Fatal("null caller-mutated tool-search schema was accepted")
+	}
+}
+
 func TestAnnotationLimitIsSharedAcrossProviders(t *testing.T) {
 	t.Parallel()
 	limits := DefaultProjectionLimits()
