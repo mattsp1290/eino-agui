@@ -188,6 +188,30 @@ func TestDrainAgenticEventsProjectsInterruptWithoutPrivateInfo(t *testing.T) {
 	}
 }
 
+func TestDrainAgenticEventsRejectsAmbiguousInterruptTargets(t *testing.T) {
+	t.Parallel()
+	firstAddress := adk.Address{{Type: adk.AddressSegmentAgent, ID: "root"}, {Type: adk.AddressSegmentTool, ID: "first"}}
+	secondAddress := adk.Address{{Type: adk.AddressSegmentAgent, ID: "root"}, {Type: adk.AddressSegmentTool, ID: "second"}}
+	for _, tc := range []struct {
+		name    string
+		targets []*adk.InterruptCtx
+	}{
+		{name: "duplicate ID", targets: []*adk.InterruptCtx{{ID: "same", Address: firstAddress}, {ID: "same", Address: secondAddress}}},
+		{name: "duplicate address", targets: []*adk.InterruptCtx{{ID: "first", Address: firstAddress}, {ID: "second", Address: firstAddress}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			event := &adk.TypedAgentEvent[*schema.AgenticMessage]{Action: &adk.AgentAction{Interrupted: &adk.InterruptInfo{InterruptContexts: tc.targets}}}
+			resolver := testEventResolverFunc(func(AgentEventCoordinates) (AgentEventResolution, error) {
+				return AgentEventResolution{Identity: agenticIDs(), Blocks: testBlockResolver{}, PauseID: "pause"}, nil
+			})
+			result, err := DrainAgenticEvents(t.Context(), sourceFromEvents(t, event), resolver)
+			if err == nil || result == nil || !result.Partial || len(result.Interrupts) != 0 {
+				t.Fatalf("result=%#v err=%v", result, err)
+			}
+		})
+	}
+}
+
 func TestDrainAgenticEventsClassifiesCancellation(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

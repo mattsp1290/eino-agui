@@ -441,16 +441,24 @@ func projectInterrupt(info *adk.InterruptInfo, pauseID string, correlation *conv
 		copyCorrelation := *correlation
 		out.Correlation = &copyCorrelation
 	}
-	seen := map[string]bool{}
+	seenIDs := make(map[string]struct{}, len(info.InterruptContexts))
+	seenAddresses := make(map[string]struct{}, len(info.InterruptContexts))
 	for i, interrupt := range info.InterruptContexts {
 		if interrupt == nil {
 			return convert.PausedV1{}, fmt.Errorf("interrupt target %d is nil", i)
 		}
 		address := interrupt.Address.String()
-		if interrupt.ID == "" || address == "" || seen[interrupt.ID+"\x00"+address] {
+		if interrupt.ID == "" || address == "" {
 			return convert.PausedV1{}, fmt.Errorf("interrupt target %d is invalid or duplicate", i)
 		}
-		seen[interrupt.ID+"\x00"+address] = true
+		if _, duplicate := seenIDs[interrupt.ID]; duplicate {
+			return convert.PausedV1{}, fmt.Errorf("interrupt target %d is invalid or duplicate", i)
+		}
+		if _, duplicate := seenAddresses[address]; duplicate {
+			return convert.PausedV1{}, fmt.Errorf("interrupt target %d is invalid or duplicate", i)
+		}
+		seenIDs[interrupt.ID] = struct{}{}
+		seenAddresses[address] = struct{}{}
 		out.Targets[i] = convert.InterruptTargetV1{ID: interrupt.ID, Address: address}
 	}
 	return out, nil
