@@ -3,8 +3,10 @@ package stream
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -174,6 +176,15 @@ func TestDrainAgenticEventsProjectsInterruptWithoutPrivateInfo(t *testing.T) {
 	}
 	if result.Interrupts[0].PauseID != "pause-1" || result.Interrupts[0].Correlation == nil || result.Interrupts[0].Correlation.ApprovalRequestID != "approval-1" {
 		t.Fatalf("interrupt = %#v", result.Interrupts[0])
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sentinel := range []string{"PRIVATE_CHECKPOINT", "PRIVATE_INFO"} {
+		if strings.Contains(string(encoded), sentinel) {
+			t.Fatalf("private ADK sentinel %q leaked: %s", sentinel, encoded)
+		}
 	}
 }
 

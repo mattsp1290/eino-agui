@@ -2,11 +2,13 @@ package stream
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -274,8 +276,9 @@ func TestStreamAgenticTurnDetachesRealObserverOnWriteAndFlushErrors(t *testing.T
 
 func TestStreamAgenticTurnLateMalformedChunkReturnsPartialPrefix(t *testing.T) {
 	t.Parallel()
+	const private = "PRIVATE_MALFORMED_CHUNK"
 	chunks := testmodel.AgenticTextChunks(0, "safe")
-	chunks = append(chunks, &schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{{Type: schema.ContentBlockTypeReasoning, Reasoning: &schema.Reasoning{Text: "x"}, AssistantGenText: &schema.AssistantGenText{Text: "bad"}, StreamingMeta: &schema.StreamingMeta{Index: 1}}}})
+	chunks = append(chunks, &schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant, Extra: map[string]any{"private": private}, ContentBlocks: []*schema.ContentBlock{{Type: schema.ContentBlockTypeReasoning, Reasoning: &schema.Reasoning{Text: "x", Signature: private}, AssistantGenText: &schema.AssistantGenText{Text: "bad", Extension: map[string]any{"private": private}}, StreamingMeta: &schema.StreamingMeta{Index: 1}, Extra: map[string]any{"private": private}}}})
 	sink := &recordingSink{}
 	result, err := StreamAgenticTurn(t.Context(), testmodel.NewAgenticReplayModel(chunks), nil, agenticIDs(), testBlockResolver{0: {BlockID: "text"}, 1: {BlockID: "bad"}}, WithTransientSink(sink))
 	if err == nil {
@@ -283,6 +286,16 @@ func TestStreamAgenticTurnLateMalformedChunkReturnsPartialPrefix(t *testing.T) {
 	}
 	if !result.Partial || result.PublicProjection != nil || len(result.DeliveredTransient) != 1 {
 		t.Fatalf("result = %#v", result)
+	}
+	if strings.Contains(err.Error(), private) {
+		t.Fatalf("private chunk leaked to error: %v", err)
+	}
+	encoded, marshalErr := json.Marshal(result.DeliveredTransient)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	if bytes.Contains(encoded, []byte(private)) {
+		t.Fatalf("private chunk leaked beyond partial prefix: %s", encoded)
 	}
 }
 

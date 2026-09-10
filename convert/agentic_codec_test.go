@@ -259,6 +259,113 @@ func TestProjectionPrivacyAndImmutability(t *testing.T) {
 	}
 }
 
+func TestForbiddenProviderSentinelsNeverReachProjectionWireOrErrors(t *testing.T) {
+	t.Parallel()
+	sentinels := []string{
+		"SENTINEL_MESSAGE_EXTRA", "SENTINEL_BLOCK_EXTRA", "SENTINEL_SIGNATURE",
+		"SENTINEL_REASONING_EXTENSION", "SENTINEL_TEXT_EXTENSION",
+		"SENTINEL_CLAUDE_ENCRYPTED_INDEX", "SENTINEL_RESPONSE_EXTENSION",
+		"SENTINEL_OPENAI_RESPONSE_ID", "SENTINEL_OPENAI_PREVIOUS_ID",
+		"SENTINEL_CLAUDE_RESPONSE_ID", "SENTINEL_GEMINI_RESPONSE_ID",
+		"SENTINEL_GEMINI_SDK_BLOB", "SENTINEL_TOOL_EXTRA", "SENTINEL_RESULT_EXTRA",
+	}
+	reasoning := schema.NewContentBlock(&schema.Reasoning{
+		Text: "public reasoning", Signature: sentinels[2],
+		OpenAIExtension: &openai.ReasoningExtension{Content: []*openai.ReasoningContent{{Text: sentinels[3]}}},
+	})
+	reasoning.Extra = map[string]any{"private": sentinels[1]}
+	assistantText := schema.NewContentBlock(&schema.AssistantGenText{
+		Text: "public answer",
+		ClaudeExtension: &claude.AssistantGenTextExtension{Citations: []*claude.TextCitation{{
+			Type: claude.TextCitationTypeWebSearchResultLocation,
+			WebSearchResultLocation: &claude.CitationWebSearchResultLocation{
+				Title: "public title", URL: "https://example.test/source", EncryptedIndex: sentinels[5],
+			},
+		}}},
+		Extension: map[string]any{"private": sentinels[4]},
+	})
+	assistant := &schema.AgenticMessage{
+		Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{reasoning, assistantText},
+		Extra: map[string]any{"private": sentinels[0]},
+		ResponseMeta: &schema.AgenticResponseMeta{
+			Extension: map[string]any{"private": sentinels[6]},
+			OpenAIExtension: &openai.ResponseMetaExtension{
+				ID: sentinels[7], PreviousResponseID: sentinels[8], Status: openai.ResponseStatus("completed"),
+			},
+			ClaudeExtension: &claude.ResponseMetaExtension{ID: sentinels[9], StopReason: "end_turn"},
+			GeminiExtension: &gemini.ResponseMetaExtension{
+				ID: sentinels[10], FinishReason: "STOP",
+				GroundingMeta: &gemini.GroundingMetadata{SearchEntryPoint: &gemini.SearchEntryPoint{SDKBlob: []byte(sentinels[11])}},
+			},
+		},
+	}
+	assistantProjection, err := ToAgenticProjection(assistant, testContext(
+		AgenticBlockContext{BlockID: "reasoning"}, AgenticBlockContext{BlockID: "text"},
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tool := &schema.ToolInfo{Name: "lookup", Extra: map[string]any{"private": sentinels[12]}}
+	resultPart := &schema.FunctionToolResultContentBlock{
+		Type: schema.FunctionToolResultContentBlockTypeText, Text: &schema.UserInputText{Text: "public result"},
+		Extra: map[string]any{"private": sentinels[13]},
+	}
+	user := &schema.AgenticMessage{Role: schema.AgenticRoleTypeUser, ContentBlocks: []*schema.ContentBlock{
+		schema.NewContentBlock(&schema.ToolSearchFunctionToolResult{CallID: "search", Name: "search", Result: &schema.ToolSearchResult{Tools: []*schema.ToolInfo{tool}}}),
+		schema.NewContentBlock(&schema.FunctionToolResult{CallID: "call", Name: "lookup", Content: []*schema.FunctionToolResultContentBlock{resultPart}}),
+	}}
+	userProjection, err := ToAgenticProjection(user, testContext(
+		AgenticBlockContext{BlockID: "search"}, AgenticBlockContext{BlockID: "result"},
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var wire [][]byte
+	for _, value := range []any{assistantProjection.Public, assistantProjection.Blocks, userProjection.Public, userProjection.Blocks, userProjection.NativeMessage} {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wire = append(wire, encoded)
+	}
+	for _, projection := range []*AgenticProjection{assistantProjection, userProjection} {
+		for _, block := range projection.Blocks {
+			for _, event := range block.Native {
+				encoded, err := json.Marshal(event)
+				if err != nil {
+					t.Fatal(err)
+				}
+				wire = append(wire, encoded)
+			}
+		}
+	}
+	for _, encoded := range wire {
+		for _, sentinel := range sentinels {
+			if bytes.Contains(encoded, []byte(sentinel)) {
+				t.Fatalf("private sentinel %q leaked to public wire: %s", sentinel, encoded)
+			}
+		}
+	}
+
+	malformed := *assistantText
+	malformed.Type = schema.ContentBlockTypeReasoning
+	malformed.Reasoning = &schema.Reasoning{Text: "public", Signature: sentinels[2]}
+	_, err = ProjectAgenticMessage(
+		&schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{&malformed}, Extra: map[string]any{"private": sentinels[0]}},
+		testContext(AgenticBlockContext{BlockID: "malformed"}),
+	)
+	if err == nil {
+		t.Fatal("malformed private fixture was accepted")
+	}
+	for _, sentinel := range sentinels {
+		if strings.Contains(err.Error(), sentinel) {
+			t.Fatalf("private sentinel %q leaked to error: %v", sentinel, err)
+		}
+	}
+}
+
 func TestEnvelopeStrictDecodeAndDigest(t *testing.T) {
 	t.Parallel()
 	envelope := &AgenticEnvelopeV1{Version: 1, Kind: EnvelopeTurnFinished, Identity: testIdentity(), Lifecycle: &LifecycleFactV1{Detail: "committed"}}
@@ -641,6 +748,44 @@ func TestFixedDigestVectors(t *testing.T) {
 	}
 	if lifecycleDigest != wantLifecycle {
 		t.Fatalf("lifecycle digest = %s", lifecycleDigest)
+	}
+}
+
+func TestProjectionDigestMatchesIndependentCanonicalMapNumericAndStringVector(t *testing.T) {
+	t.Parallel()
+	project := func(arguments map[string]any) *PublicAgenticMessage {
+		t.Helper()
+		projection, err := ToAgenticProjection(
+			&schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{
+				schema.NewContentBlock(&schema.ServerToolCall{CallID: "server-edge", Name: "lookup", Arguments: arguments}),
+			}},
+			testContext(AgenticBlockContext{BlockID: "block-edge", ProviderServerID: "provider-edge"}),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return projection.Public
+	}
+
+	first := project(map[string]any{
+		"z":      json.Number("1.0"),
+		"a":      "é/雪",
+		"nested": []any{true, nil, json.Number("-0")},
+	})
+	second := project(map[string]any{
+		"nested": []any{true, nil, float64(0)},
+		"a":      "é/雪",
+		"z":      float64(1),
+	})
+	if first.Digest != second.Digest {
+		t.Fatalf("equivalent map/numeric projections differ: %s != %s", first.Digest, second.Digest)
+	}
+
+	manualCanonical := `{"contentBlocks":[{"identity":{"agentPath":[{"name":"root","runId":"run-1"}],"attemptId":"attempt-1","blockId":"block-edge","callId":"server-edge","messageId":"message-1","runId":"run-1","sessionId":"session-1","threadId":"session-1","turnId":"turn-1"},"serverToolCall":{"arguments":{"a":"é/雪","nested":[true,null,0],"z":1},"callId":"server-edge","executionOwner":"provider","name":"lookup","providerServerId":"provider-edge"},"type":"server_tool_call"}],"identity":{"agentPath":[{"name":"root","runId":"run-1"}],"attemptId":"attempt-1","messageId":"message-1","runId":"run-1","sessionId":"session-1","threadId":"session-1","turnId":"turn-1"},"role":"assistant","version":1}`
+	sum := sha256.Sum256(append([]byte("eino-agentic-v1\x00projection\x00"), manualCanonical...))
+	want := CandidateDigestV1(fmt.Sprintf("%x", sum))
+	if first.Digest != want {
+		t.Fatalf("projection digest = %s, independent canonical digest = %s", first.Digest, want)
 	}
 }
 
