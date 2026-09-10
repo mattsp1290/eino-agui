@@ -33,7 +33,8 @@ The custom content block is authoritative after commit and is not appended as
 a duplicate logical block. Replay starts with a fresh reducer and consumes the
 complete canonical native sequence once.
 
-To re-check the fixtures against the reference implementation, run:
+To re-check the four classic fixtures against the reference implementation,
+run:
 
 ```bash
 AG_UI_REPO_DIR=/path/to/ag-ui testdata/golden/capture_reference.sh
@@ -41,3 +42,13 @@ AG_UI_REPO_DIR=/path/to/ag-ui testdata/golden/capture_reference.sh
 
 The script requires an exact, clean checkout of the target commit and removes
 its injected capture test on both success and failure.
+
+The agentic fixtures are bridge-owned because the pinned AG-UI example does not
+implement Eino's agentic schema. Rebuild and strictly compare the normalized
+agentic stream fixture, then exercise its native/custom merge through the exact
+pinned TypeScript reducer, with:
+
+```bash
+go test ./emitter ./internal/golden -run 'AgenticStream|AgenticConvert' -count=1
+AG_UI_REPO_DIR=/path/to/ag-ui testdata/agui-client/check.sh
+```
