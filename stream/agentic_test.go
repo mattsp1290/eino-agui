@@ -17,6 +17,7 @@ import (
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/encoding/sse"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
+	"github.com/cloudwego/eino/schema/gemini"
 
 	"github.com/mattsp1290/eino-agui/convert"
 	"github.com/mattsp1290/eino-agui/emitter"
@@ -570,6 +571,116 @@ func TestStreamAgenticTurnEnforcesBlockAndByteLimits(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestStreamAgenticTurnEnforcesCumulativeRichLimitsBeforeConcat(t *testing.T) {
+	t.Parallel()
+	t.Run("block payload and transient prefix", func(t *testing.T) {
+		fragment := strings.Repeat("x", 600<<10)
+		sink := &recordingSink{}
+		result, err := StreamAgenticTurn(
+			t.Context(), testmodel.NewAgenticReplayModel(testmodel.AgenticTextChunks(0, fragment, fragment)), nil,
+			agenticIDs(), testBlockResolver{0: {BlockID: "text"}}, WithTransientSink(sink),
+		)
+		if err == nil || !strings.Contains(err.Error(), "cumulative public block payload limit exceeded") {
+			t.Fatalf("error = %v", err)
+		}
+		if result == nil || !result.Partial || len(result.DeliveredTransient) != 1 {
+			t.Fatalf("result = %#v, want one accepted transient prefix", result)
+		}
+		if result.Assistant == nil || len(result.Assistant.ContentBlocks) != 1 {
+			t.Fatalf("partial assistant = %#v", result.Assistant)
+		}
+		if got := result.Assistant.ContentBlocks[0].AssistantGenText.Text; got != fragment {
+			t.Fatalf("partial assistant includes rejected fragment: got %d bytes", len(got))
+		}
+	})
+
+	t.Run("message payload across blocks", func(t *testing.T) {
+		fragment := strings.Repeat("x", 600<<10)
+		limits := convert.DefaultProjectionLimits()
+		limits.MaxMessageBytes = 900 << 10
+		chunks := append(testmodel.AgenticTextChunks(0, fragment), testmodel.AgenticTextChunks(1, fragment)...)
+		result, err := StreamAgenticTurn(
+			t.Context(), testmodel.NewAgenticReplayModel(chunks), nil, agenticIDs(),
+			testBlockResolver{0: {BlockID: "first"}, 1: {BlockID: "second"}}, WithProjectionLimits(limits),
+		)
+		if err == nil || !strings.Contains(err.Error(), "cumulative public message payload limit exceeded") || result == nil || !result.Partial {
+			t.Fatalf("result=%#v error=%v", result, err)
+		}
+	})
+
+	t.Run("server string arguments", func(t *testing.T) {
+		fragment := strings.Repeat("x", 600<<10)
+		chunk := func(callID, name string) *schema.AgenticMessage {
+			return &schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{
+				schema.NewContentBlockChunk(&schema.ServerToolCall{CallID: callID, Name: name, Arguments: fragment}, &schema.StreamingMeta{Index: 0}),
+			}}
+		}
+		result, err := StreamAgenticTurn(
+			t.Context(), testmodel.NewAgenticReplayModel([]*schema.AgenticMessage{chunk("call", "search"), chunk("", "")}), nil,
+			agenticIDs(), testBlockResolver{0: {BlockID: "server", ProviderServerID: "provider"}},
+		)
+		if err == nil || !strings.Contains(err.Error(), "cumulative public block payload limit exceeded") || result == nil || !result.Partial {
+			t.Fatalf("result=%#v error=%v", result, err)
+		}
+	})
+
+	t.Run("function result parts", func(t *testing.T) {
+		indexedResult := func(callID, name, text string) *schema.AgenticMessage {
+			return &schema.AgenticMessage{Role: schema.AgenticRoleTypeUser, ContentBlocks: []*schema.ContentBlock{
+				schema.NewContentBlockChunk(&schema.FunctionToolResult{
+					CallID: callID, Name: name,
+					Content: []*schema.FunctionToolResultContentBlock{{Type: schema.FunctionToolResultContentBlockTypeText, Text: &schema.UserInputText{Text: text}}},
+				}, &schema.StreamingMeta{Index: 0}),
+			}}
+		}
+		limits := convert.DefaultProjectionLimits()
+		limits.MaxBlocks = 1
+		result, err := drainAgenticReader(
+			t.Context(), schema.StreamReaderFromArray([]*schema.AgenticMessage{indexedResult("call", "lookup", "first"), indexedResult("", "", "second")}),
+			agenticIDs(), testBlockResolver{0: {BlockID: "result"}}, agenticConfig{limits: limits, expectedRole: schema.AgenticRoleTypeUser},
+		)
+		if err == nil || !strings.Contains(err.Error(), "function result part limit exceeded") || result == nil || !result.Partial {
+			t.Fatalf("result=%#v error=%v", result, err)
+		}
+	})
+
+	t.Run("MCP tool definitions", func(t *testing.T) {
+		chunk := func(server, name string) *schema.AgenticMessage {
+			return &schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{
+				schema.NewContentBlockChunk(&schema.MCPListToolsResult{ServerLabel: server, Tools: []*schema.MCPListToolsItem{{Name: name}}}, &schema.StreamingMeta{Index: 0}),
+			}}
+		}
+		limits := convert.DefaultProjectionLimits()
+		limits.MaxToolDefinitions = 1
+		result, err := StreamAgenticTurn(
+			t.Context(), testmodel.NewAgenticReplayModel([]*schema.AgenticMessage{chunk("server", "first"), chunk("", "second")}), nil,
+			agenticIDs(), testBlockResolver{0: {BlockID: "tools"}}, WithProjectionLimits(limits),
+		)
+		if err == nil || !strings.Contains(err.Error(), "MCP tool definition limit exceeded") || result == nil || !result.Partial {
+			t.Fatalf("result=%#v error=%v", result, err)
+		}
+	})
+
+	t.Run("Gemini response metadata", func(t *testing.T) {
+		limits := convert.DefaultProjectionLimits()
+		limits.MaxAnnotations = 1
+		chunks := []*schema.AgenticMessage{
+			{Role: schema.AgenticRoleTypeAssistant, ResponseMeta: &schema.AgenticResponseMeta{GeminiExtension: &gemini.ResponseMetaExtension{GroundingMeta: &gemini.GroundingMetadata{
+				GroundingChunks: []*gemini.GroundingChunk{{Web: &gemini.GroundingChunkWeb{Title: "source", URI: "https://example.test"}}},
+			}}}},
+			{Role: schema.AgenticRoleTypeAssistant, ResponseMeta: &schema.AgenticResponseMeta{GeminiExtension: &gemini.ResponseMetaExtension{GroundingMeta: &gemini.GroundingMetadata{
+				GroundingSupports: []*gemini.GroundingSupport{{}},
+			}}}},
+		}
+		result, err := StreamAgenticTurn(
+			t.Context(), testmodel.NewAgenticReplayModel(chunks), nil, agenticIDs(), testBlockResolver{}, WithProjectionLimits(limits),
+		)
+		if err == nil || !strings.Contains(err.Error(), "grounding entry limit exceeded") || result == nil || !result.Partial {
+			t.Fatalf("result=%#v error=%v", result, err)
+		}
+	})
 }
 
 func TestStreamAgenticTurnDoesNotMutateInput(t *testing.T) {

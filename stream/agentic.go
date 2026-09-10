@@ -110,17 +110,24 @@ type blockLedger struct {
 	approvalRequestID string
 	url               string
 	mimeType          string
+	payloadBytes      int
+	resultParts       int
+	toolDefinitions   int
+	annotations       int
 }
 type agenticDrain struct {
-	result        *AgenticResult
-	chunks        []*schema.AgenticMessage
-	base          convert.AgenticIdentityV1
-	resolver      BlockContextResolver
-	config        agenticConfig
-	indexed       map[int]blockLedger
-	mode          string
-	nextUnindexed int
-	detached      bool
+	result          *AgenticResult
+	chunks          []*schema.AgenticMessage
+	base            convert.AgenticIdentityV1
+	resolver        BlockContextResolver
+	config          agenticConfig
+	indexed         map[int]blockLedger
+	mode            string
+	nextUnindexed   int
+	detached        bool
+	payloadBytes    int
+	metaEntries     int
+	metaAnnotations int
 }
 
 func drainAgenticReader(ctx context.Context, reader *schema.StreamReader[*schema.AgenticMessage], ids AgenticStreamIdentity, resolver BlockContextResolver, config agenticConfig) (*AgenticResult, error) {
@@ -185,9 +192,8 @@ func (s *agenticDrain) apply(chunk *schema.AgenticMessage) error {
 	if len(s.chunks) >= s.config.limits.MaxStreamChunks {
 		return errors.New("agentic stream chunk limit exceeded")
 	}
-	s.chunks = append(s.chunks, chunk)
-	if chunk.ResponseMeta != nil && chunk.ResponseMeta.TokenUsage != nil {
-		accumulateAgenticUsage(&s.result.Usage, chunk.ResponseMeta.TokenUsage)
+	if err := s.accountResponseMeta(chunk.ResponseMeta); err != nil {
+		return err
 	}
 	for _, block := range chunk.ContentBlocks {
 		if block == nil {
@@ -220,7 +226,6 @@ func (s *agenticDrain) apply(chunk *schema.AgenticMessage) error {
 				return fmt.Errorf("resolve agentic block %d: %w", index, err)
 			}
 			ledger = blockLedger{kind: block.Type, context: context}
-			s.indexed[index] = ledger
 		} else if ledger.kind != block.Type {
 			return fmt.Errorf("agentic stream block %d changed kind from %s to %s", index, ledger.kind, block.Type)
 		}
@@ -228,10 +233,21 @@ func (s *agenticDrain) apply(chunk *schema.AgenticMessage) error {
 		if err != nil {
 			return fmt.Errorf("agentic stream block %d: %w", index, err)
 		}
-		s.indexed[index] = updated
-		if err := s.emitTransient(chunk.Role, normalized, ledger.context); err != nil {
+		public, err := projectChunkBlock(chunk.Role, normalized, ledger.context, s.base, s.config.limits)
+		if err != nil {
 			return err
 		}
+		if err := s.accountBlock(public, &updated); err != nil {
+			return fmt.Errorf("agentic stream block %d: %w", index, err)
+		}
+		s.indexed[index] = updated
+		if err := s.emitTransient(public); err != nil {
+			return err
+		}
+	}
+	s.chunks = append(s.chunks, chunk)
+	if chunk.ResponseMeta != nil && chunk.ResponseMeta.TokenUsage != nil {
+		accumulateAgenticUsage(&s.result.Usage, chunk.ResponseMeta.TokenUsage)
 	}
 	return nil
 }
@@ -387,15 +403,11 @@ func restoreStreamBlockFields(block *schema.ContentBlock, ledger blockLedger) *s
 	return &copyBlock
 }
 
-func (s *agenticDrain) emitTransient(role schema.AgenticRoleType, block *schema.ContentBlock, context convert.AgenticBlockContext) error {
+func (s *agenticDrain) emitTransient(block convert.PublicContentBlock) error {
 	if s.config.sink == nil || s.detached {
-		return validateChunkBlock(role, block, context, s.base, s.config.limits)
+		return nil
 	}
-	public, err := projectChunkBlock(role, block, context, s.base, s.config.limits)
-	if err != nil {
-		return err
-	}
-	transient, err := convert.TransientEventForBlock(public)
+	transient, err := convert.TransientEventForBlock(block)
 	if err != nil {
 		// Rich/custom blocks are buffered until commit, but their unions and limits
 		// were still validated by projectChunkBlock.
@@ -414,10 +426,130 @@ func (s *agenticDrain) emitTransient(role schema.AgenticRoleType, block *schema.
 	return nil
 }
 
-func validateChunkBlock(role schema.AgenticRoleType, block *schema.ContentBlock, context convert.AgenticBlockContext, base convert.AgenticIdentityV1, limits convert.ProjectionLimits) error {
-	_, err := projectChunkBlock(role, block, context, base, limits)
-	return err
+func (s *agenticDrain) accountBlock(block convert.PublicContentBlock, ledger *blockLedger) error {
+	delta, err := streamBlockPayloadBytes(block, s.config.limits.MaxBlockBytes)
+	if err != nil {
+		return err
+	}
+	if err := addStreamCount(&ledger.payloadBytes, delta, s.config.limits.MaxBlockBytes, "cumulative public block payload limit exceeded"); err != nil {
+		return err
+	}
+	if err := addStreamCount(&s.payloadBytes, delta, s.config.limits.MaxMessageBytes, "cumulative public message payload limit exceeded"); err != nil {
+		return err
+	}
+	if block.FunctionToolResult != nil {
+		if err := addStreamCount(&ledger.resultParts, len(block.FunctionToolResult.Content), s.config.limits.MaxBlocks, "function result part limit exceeded"); err != nil {
+			return err
+		}
+	}
+	if block.MCPListToolsResult != nil {
+		if err := addStreamCount(&ledger.toolDefinitions, len(block.MCPListToolsResult.Tools), s.config.limits.MaxToolDefinitions, "MCP tool definition limit exceeded"); err != nil {
+			return err
+		}
+	}
+	if block.ProviderAnnotations != nil {
+		count := len(block.ProviderAnnotations.OpenAI) + len(block.ProviderAnnotations.Claude)
+		if err := addStreamCount(&ledger.annotations, count, s.config.limits.MaxAnnotations, "provider annotation limit exceeded"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
+
+func (s *agenticDrain) accountResponseMeta(meta *schema.AgenticResponseMeta) error {
+	if meta == nil || meta.GeminiExtension == nil || meta.GeminiExtension.GroundingMeta == nil {
+		return nil
+	}
+	grounding := meta.GeminiExtension.GroundingMeta
+	if err := addStreamCount(&s.metaAnnotations, len(grounding.GroundingChunks), s.config.limits.MaxAnnotations, "grounding entry limit exceeded"); err != nil {
+		return err
+	}
+	if err := addStreamCount(&s.metaAnnotations, len(grounding.GroundingSupports), s.config.limits.MaxAnnotations, "grounding entry limit exceeded"); err != nil {
+		return err
+	}
+	if err := addStreamCount(&s.metaEntries, len(grounding.WebSearchQueries), s.config.limits.MaxJSONEntries, "grounding value entry limit exceeded"); err != nil {
+		return err
+	}
+	for _, support := range grounding.GroundingSupports {
+		if support == nil {
+			continue
+		}
+		if err := addStreamCount(&s.metaEntries, len(support.GroundingChunkIndices), s.config.limits.MaxJSONEntries, "grounding value entry limit exceeded"); err != nil {
+			return err
+		}
+		if err := addStreamCount(&s.metaEntries, len(support.ConfidenceScores), s.config.limits.MaxJSONEntries, "grounding value entry limit exceeded"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func streamBlockPayloadBytes(block convert.PublicContentBlock, limit int) (int, error) {
+	if block.Text != nil {
+		return len(*block.Text), nil
+	}
+	if block.Media != nil {
+		return len(block.Media.Base64Data), nil
+	}
+	if block.FunctionToolCall != nil {
+		return len(block.FunctionToolCall.Arguments), nil
+	}
+	if block.FunctionToolResult != nil {
+		total := 0
+		for _, part := range block.FunctionToolResult.Content {
+			if err := addStreamCount(&total, len(part.Text), limit, "cumulative public block payload limit exceeded"); err != nil {
+				return 0, err
+			}
+			if part.Media != nil {
+				for _, size := range []int{len(part.Media.URL), len(part.Media.Base64Data), len(part.Media.MIMEType), len(part.Media.Name)} {
+					if err := addStreamCount(&total, size, limit, "cumulative public block payload limit exceeded"); err != nil {
+						return 0, err
+					}
+				}
+			}
+		}
+		return total, nil
+	}
+	if block.ServerToolCall != nil {
+		if value, ok := block.ServerToolCall.Arguments.(string); ok {
+			return len(value), nil
+		}
+		return 0, nil
+	}
+	if block.ServerToolResult != nil {
+		if value, ok := block.ServerToolResult.Content.(string); ok {
+			return len(value), nil
+		}
+		return 0, nil
+	}
+	if block.MCPToolCall != nil {
+		return len(block.MCPToolCall.Arguments), nil
+	}
+	if block.MCPListToolsResult != nil {
+		total := 0
+		for _, tool := range block.MCPListToolsResult.Tools {
+			for _, size := range []int{len(tool.Name), len(tool.Description), len(tool.InputSchema)} {
+				if err := addStreamCount(&total, size, limit, "cumulative public block payload limit exceeded"); err != nil {
+					return 0, err
+				}
+			}
+		}
+		return total, nil
+	}
+	if block.MCPApprovalRequest != nil {
+		return len(block.MCPApprovalRequest.Arguments), nil
+	}
+	return 0, nil
+}
+
+func addStreamCount(current *int, next, limit int, message string) error {
+	if next < 0 || *current > limit-next {
+		return errors.New(message)
+	}
+	*current += next
+	return nil
+}
+
 func projectChunkBlock(role schema.AgenticRoleType, block *schema.ContentBlock, context convert.AgenticBlockContext, base convert.AgenticIdentityV1, limits convert.ProjectionLimits) (convert.PublicContentBlock, error) {
 	copyBlock := *block
 	copyBlock.StreamingMeta = nil
