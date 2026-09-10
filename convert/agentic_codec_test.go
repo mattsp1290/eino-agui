@@ -948,3 +948,81 @@ func FuzzDecodeAgenticEnvelope(f *testing.F) {
 		}
 	})
 }
+
+func FuzzAgenticUnionValidation(f *testing.F) {
+	f.Add(uint8(1), uint8(0), uint8(1), uint8(0))
+	f.Add(uint8(3), uint8(0), uint8(0), uint8(0))
+	f.Add(uint8(8), uint8(3), uint8(3), uint8(0))
+	f.Add(uint8(8), uint8(3), uint8(16), uint8(4))
+	f.Fuzz(func(t *testing.T, outerMask, outerDiscriminator, nestedMask, nestedDiscriminator uint8) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				t.Fatalf("panic: %v", recovered)
+			}
+		}()
+
+		nestedKinds := []schema.FunctionToolResultContentBlockType{
+			schema.FunctionToolResultContentBlockTypeText,
+			schema.FunctionToolResultContentBlockTypeImage,
+			schema.FunctionToolResultContentBlockTypeAudio,
+			schema.FunctionToolResultContentBlockTypeVideo,
+			schema.FunctionToolResultContentBlockTypeFile,
+		}
+		nested := &schema.FunctionToolResultContentBlock{Type: nestedKinds[int(nestedDiscriminator)%len(nestedKinds)]}
+		if nestedMask&1 != 0 {
+			nested.Text = &schema.UserInputText{Text: "text"}
+		}
+		if nestedMask&2 != 0 {
+			nested.Image = &schema.UserInputImage{URL: "https://example.test/image"}
+		}
+		if nestedMask&4 != 0 {
+			nested.Audio = &schema.UserInputAudio{URL: "https://example.test/audio"}
+		}
+		if nestedMask&8 != 0 {
+			nested.Video = &schema.UserInputVideo{URL: "https://example.test/video"}
+		}
+		if nestedMask&16 != 0 {
+			nested.File = &schema.UserInputFile{URL: "https://example.test/file", Name: "file"}
+		}
+
+		outerKinds := []schema.ContentBlockType{
+			schema.ContentBlockTypeReasoning,
+			schema.ContentBlockTypeAssistantGenText,
+			schema.ContentBlockTypeFunctionToolCall,
+			schema.ContentBlockTypeFunctionToolResult,
+		}
+		block := &schema.ContentBlock{Type: outerKinds[int(outerDiscriminator)%len(outerKinds)]}
+		if outerMask&1 != 0 {
+			block.Reasoning = &schema.Reasoning{Text: "reason"}
+		}
+		if outerMask&2 != 0 {
+			block.AssistantGenText = &schema.AssistantGenText{Text: "answer"}
+		}
+		if outerMask&4 != 0 {
+			block.FunctionToolCall = &schema.FunctionToolCall{CallID: "call", Name: "lookup", Arguments: `{}`}
+		}
+		if outerMask&8 != 0 {
+			block.FunctionToolResult = &schema.FunctionToolResult{CallID: "call", Name: "lookup", Content: []*schema.FunctionToolResultContentBlock{nested}}
+		}
+		role := schema.AgenticRoleTypeAssistant
+		if block.Type == schema.ContentBlockTypeFunctionToolResult {
+			role = schema.AgenticRoleTypeUser
+		}
+		project := func() ([]byte, string) {
+			value, err := ProjectAgenticMessage(&schema.AgenticMessage{Role: role, ContentBlocks: []*schema.ContentBlock{block}}, testContext(AgenticBlockContext{BlockID: "block"}))
+			if err != nil {
+				return nil, err.Error()
+			}
+			encoded, err := json.Marshal(value)
+			if err != nil {
+				return nil, err.Error()
+			}
+			return encoded, ""
+		}
+		firstValue, firstError := project()
+		secondValue, secondError := project()
+		if firstError != secondError || !bytes.Equal(firstValue, secondValue) {
+			t.Fatalf("nondeterministic union result: first=(%q,%s) second=(%q,%s)", firstValue, firstError, secondValue, secondError)
+		}
+	})
+}

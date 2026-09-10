@@ -322,6 +322,57 @@ func TestStreamAgenticTurnRejectsKindConflict(t *testing.T) {
 	}
 }
 
+func TestStreamAgenticTurnRejectsInvalidLedgerShapes(t *testing.T) {
+	t.Parallel()
+	indexedText := func(index int, text string) *schema.AgenticMessage {
+		return &schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{
+			schema.NewContentBlockChunk(&schema.AssistantGenText{Text: text}, &schema.StreamingMeta{Index: index}),
+		}}
+	}
+	unindexedText := func(text string) *schema.AgenticMessage {
+		return &schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{
+			schema.NewContentBlock(&schema.AssistantGenText{Text: text}),
+		}}
+	}
+	toolChunk := func(callID, name, arguments string) *schema.AgenticMessage {
+		return &schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{
+			schema.NewContentBlockChunk(&schema.FunctionToolCall{CallID: callID, Name: name, Arguments: arguments}, &schema.StreamingMeta{Index: 0}),
+		}}
+	}
+	tests := []struct {
+		name   string
+		chunks []*schema.AgenticMessage
+		want   string
+	}{
+		{
+			name: "wrong role",
+			chunks: []*schema.AgenticMessage{{Role: schema.AgenticRoleTypeUser, ContentBlocks: []*schema.ContentBlock{
+				schema.NewContentBlockChunk(&schema.UserInputText{Text: "wrong"}, &schema.StreamingMeta{Index: 0}),
+			}}},
+			want: "role does not match",
+		},
+		{name: "negative index", chunks: []*schema.AgenticMessage{indexedText(-1, "bad")}, want: "index is negative"},
+		{name: "indexed then unindexed", chunks: []*schema.AgenticMessage{indexedText(0, "first"), unindexedText("second")}, want: "mixes indexed and unindexed"},
+		{name: "unindexed then indexed", chunks: []*schema.AgenticMessage{unindexedText("first"), indexedText(1, "second")}, want: "mixes indexed and unindexed"},
+		{name: "function call ID changes", chunks: []*schema.AgenticMessage{toolChunk("call-1", "lookup", `{`), toolChunk("call-2", "lookup", `}`)}, want: "function call ID changed"},
+		{name: "function call name changes", chunks: []*schema.AgenticMessage{toolChunk("call-1", "lookup", `{`), toolChunk("call-1", "search", `}`)}, want: "function call name changed"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := StreamAgenticTurn(
+				t.Context(), testmodel.NewAgenticReplayModel(tc.chunks), nil, agenticIDs(),
+				testBlockResolver{0: {BlockID: "zero"}, 1: {BlockID: "one"}},
+			)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error=%v, want substring %q", err, tc.want)
+			}
+			if result == nil || !result.Partial || result.PublicProjection != nil || result.Terminal != AgenticTerminalError {
+				t.Fatalf("result=%#v, want partial error without projection", result)
+			}
+		})
+	}
+}
+
 func TestStreamAgenticTurnHonorsWithOnEOFFinalValueAndError(t *testing.T) {
 	t.Parallel()
 	makeReader := func(onEOF func() (any, error)) *schema.StreamReader[*schema.AgenticMessage] {
