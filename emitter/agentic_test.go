@@ -1,6 +1,7 @@
 package emitter
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/encoding/sse"
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/mattsp1290/eino-agui/convert"
@@ -24,6 +26,20 @@ var _ interface {
 	Emit(events.Event) error
 	Detach(error)
 } = (*ObserverSink)(nil)
+
+type failAfterEventWrites struct {
+	buffer  bytes.Buffer
+	allowed int
+	writes  int
+}
+
+func (w *failAfterEventWrites) Write(data []byte) (int, error) {
+	if w.writes >= w.allowed {
+		return 0, errors.New("broken pipe")
+	}
+	w.writes++
+	return w.buffer.Write(data)
+}
 
 func agenticProjection(t *testing.T) *convert.AgenticProjection {
 	return agenticProjectionForAttempt(t, "attempt")
@@ -313,6 +329,37 @@ func TestCommittedMixedBlocksPreserveExactNativeAndCustomOrder(t *testing.T) {
 	}
 	if got := golden.FrameTypes(normalizedFrames(t, sink)); !reflect.DeepEqual(got, want) {
 		t.Fatalf("types = %v, want %v", got, want)
+	}
+}
+
+func TestCommittedMultiEventBlockReportsEveryTransportFailureBoundary(t *testing.T) {
+	t.Parallel()
+	id := agenticProjection(t).Public.Identity
+	projection, err := convert.ToAgenticProjection(
+		&schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant, ContentBlocks: []*schema.ContentBlock{schema.NewContentBlock(&schema.Reasoning{Text: "reason"})}},
+		convert.AgenticProjectionContext{Identity: id, Blocks: []convert.AgenticBlockContext{{BlockID: "reason"}}, Limits: convert.DefaultProjectionLimits()},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := convert.CommitReceiptV1{Revision: "revision", Domain: "projection", Identity: id, Digest: projection.Digest}
+	// A committed reasoning block contains five native frames followed by its
+	// authoritative custom supplement. Fail immediately before each frame.
+	for allowed := 0; allowed < 6; allowed++ {
+		t.Run(fmt.Sprintf("after_%d_frames", allowed), func(t *testing.T) {
+			transport := &failAfterEventWrites{allowed: allowed}
+			writer := bufio.NewWriter(transport)
+			emit := NewObserverEmitter(t.Context(), writer, sse.NewSSEWriter())
+			if emit.EmitCommittedProjection(projection, receipt, DeliveryModeReplay) {
+				t.Fatal("transport failure reported success")
+			}
+			if emit.Err() == nil || transport.writes != allowed {
+				t.Fatalf("transport error=%v writes=%d, want %d", emit.Err(), transport.writes, allowed)
+			}
+			if frames := bytes.Count(transport.buffer.Bytes(), []byte("\n\n")); frames != allowed {
+				t.Fatalf("complete prefix frames=%d, want %d\n%s", frames, allowed, transport.buffer.String())
+			}
+		})
 	}
 }
 

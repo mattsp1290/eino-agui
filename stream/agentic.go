@@ -149,8 +149,20 @@ func receiveAgenticChunk(ctx context.Context, reader *schema.StreamReader[*schem
 		chunk, err := reader.Recv()
 		received <- agenticReceive{chunk: chunk, err: err}
 	}()
+	if err := ctx.Err(); err != nil {
+		closeReader()
+		<-received
+		return nil, err
+	}
 	select {
 	case item := <-received:
+		// Cancellation is the host's execution terminal. If closing the reader
+		// makes EOF race with that signal, do not misclassify the cancelled turn
+		// as successful merely because the receive result won the select.
+		if err := ctx.Err(); err != nil {
+			closeReader()
+			return nil, err
+		}
 		return item.chunk, item.err
 	case <-ctx.Done():
 		closeReader()

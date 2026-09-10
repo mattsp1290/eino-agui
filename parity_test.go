@@ -42,6 +42,7 @@ func TestParityGoldenFixtures(t *testing.T) {
 				"TestEmitCommittedProjectionModes",
 				"TestAllAgenticContentKindsPassPinnedWireDecoders",
 				"TestCommittedMixedBlocksPreserveExactNativeAndCustomOrder",
+				"TestCommittedMultiEventBlockReportsEveryTransportFailureBoundary",
 				"TestCommittedProjectionEmitsResponseMetadata",
 				"TestCommittedPauseResumeOrderingAndTargets",
 				"TestTwoCommittedTurnsRequireOneExplicitRunTerminal",
