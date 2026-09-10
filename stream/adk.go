@@ -185,8 +185,7 @@ func WithAgentEventTransientSink(sink TransientSink) AgentEventOption {
 // is cancelled. It does not cause or emit cancellation by itself.
 func WithAgentEventCancellationCandidate(identity AgenticStreamIdentity, cancellation convert.CancelledV1) AgentEventOption {
 	return func(c *agentEventConfig) {
-		identity.AgentPath = append([]convert.AgentPathSegment(nil), identity.AgentPath...)
-		c.cancellation = &CancellationCandidate{Identity: identity, Cancellation: cancellation}
+		c.cancellation = &CancellationCandidate{Identity: cloneAgenticStreamIdentity(identity), Cancellation: cancellation}
 	}
 }
 
@@ -276,7 +275,7 @@ func DrainAgenticEvents(ctx context.Context, source AgentEventSource, resolver A
 				if err != nil {
 					return finish(fmt.Errorf("project cancellation: %w", err), true)
 				}
-				result.Cancellations = append(result.Cancellations, CancellationCandidate{Identity: resolution.Identity, Cancellation: cancellation})
+				result.Cancellations = append(result.Cancellations, CancellationCandidate{Identity: cloneAgenticStreamIdentity(resolution.Identity), Cancellation: cancellation})
 				return finish(nil, false)
 			}
 			return finish(event.Err, true)
@@ -346,8 +345,13 @@ func appendConfiguredCancellation(result *AgentEventResult, candidate *Cancellat
 		return
 	}
 	copyCandidate := *candidate
-	copyCandidate.Identity.AgentPath = append([]convert.AgentPathSegment(nil), candidate.Identity.AgentPath...)
+	copyCandidate.Identity = cloneAgenticStreamIdentity(candidate.Identity)
 	result.Cancellations = append(result.Cancellations, copyCandidate)
+}
+
+func cloneAgenticStreamIdentity(identity AgenticStreamIdentity) AgenticStreamIdentity {
+	identity.AgentPath = append([]convert.AgentPathSegment(nil), identity.AgentPath...)
+	return identity
 }
 
 func sameStreamIdentity(left, right AgenticStreamIdentity) bool {
@@ -369,7 +373,7 @@ func projectSubagentLifecycle(agentName string, resolution AgentEventResolution)
 		return SubagentLifecycleCandidate{}, errors.New("subagent lifecycle does not match agent name")
 	}
 	return SubagentLifecycleCandidate{
-		Kind: resolution.Subagent.Kind, Identity: resolution.Identity,
+		Kind: resolution.Subagent.Kind, Identity: cloneAgenticStreamIdentity(resolution.Identity),
 		ParentRunID: resolution.ParentRunID, SubagentRunID: resolution.SubagentRunID,
 		AgentName: agentName, Detail: resolution.Subagent.Detail,
 	}, nil

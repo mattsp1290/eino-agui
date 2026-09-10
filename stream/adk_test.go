@@ -417,6 +417,46 @@ func TestDrainAgenticEventsKeepsRepeatedSiblingNamesDistinctByHostRunID(t *testi
 	}
 }
 
+func TestDrainAgenticEventsDetachesReturnedCandidateIdentities(t *testing.T) {
+	t.Parallel()
+	shared := agenticIDs()
+	shared.AgentPath = append(shared.AgentPath, convert.AgentPathSegment{Name: "research", RunID: "sub-run-one"})
+	events := []*adk.TypedAgentEvent[*schema.AgenticMessage]{{AgentName: "research"}, {AgentName: "research"}}
+	resolver := testEventResolverFunc(func(coordinates AgentEventCoordinates) (AgentEventResolution, error) {
+		subagentRunID := "sub-run-one"
+		if coordinates.EventOrdinal == 1 {
+			subagentRunID = "sub-run-two"
+			shared.AgentPath[1].RunID = subagentRunID
+		}
+		return AgentEventResolution{
+			Identity: shared, Blocks: testBlockResolver{}, ParentRunID: "run", SubagentRunID: subagentRunID,
+			Subagent: &SubagentLifecycleResolution{Kind: SubagentLifecycleFinished},
+		}, nil
+	})
+	result, err := DrainAgenticEvents(t.Context(), sourceFromEvents(t, events...), resolver)
+	if err != nil || len(result.Subagents) != 2 {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	shared.AgentPath[1] = convert.AgentPathSegment{Name: "altered", RunID: "altered-run"}
+	if result.Subagents[0].Identity.AgentPath[1].RunID != "sub-run-one" || result.Subagents[1].Identity.AgentPath[1].RunID != "sub-run-two" {
+		t.Fatalf("returned subagent identities alias resolver memory: %#v / %#v", result.Subagents[0].Identity.AgentPath, result.Subagents[1].Identity.AgentPath)
+	}
+
+	cancellationIdentity := agenticIDs()
+	cancelEvent := &adk.TypedAgentEvent[*schema.AgenticMessage]{Err: &adk.CancelError{Info: &adk.AgentCancelInfo{Mode: adk.CancelImmediate}}}
+	cancelResolver := testEventResolverFunc(func(AgentEventCoordinates) (AgentEventResolution, error) {
+		return AgentEventResolution{Identity: cancellationIdentity, Blocks: testBlockResolver{}}, nil
+	})
+	cancelled, err := DrainAgenticEvents(t.Context(), sourceFromEvents(t, cancelEvent), cancelResolver)
+	if err != nil || len(cancelled.Cancellations) != 1 {
+		t.Fatalf("cancelled=%#v err=%v", cancelled, err)
+	}
+	cancellationIdentity.AgentPath[0].Name = "altered"
+	if cancelled.Cancellations[0].Identity.AgentPath[0].Name != "root" {
+		t.Fatalf("returned cancellation identity aliases resolver memory: %#v", cancelled.Cancellations[0].Identity.AgentPath)
+	}
+}
+
 type cleanupFailureSource struct{}
 
 func (cleanupFailureSource) Next(ctx context.Context) (*adk.TypedAgentEvent[*schema.AgenticMessage], bool, error) {
