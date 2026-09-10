@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/encoding/sse"
@@ -31,10 +32,16 @@ func (blockResolver) ResolveBlock(index int, _ schema.ContentBlockType) (convert
 	return convert.AgenticBlockContext{BlockID: "block"}, nil
 }
 
-type eventResolver struct{ ids bridge.AgenticStreamIdentity }
+type eventResolver struct {
+	ids         bridge.AgenticStreamIdentity
+	pauseID     string
+	correlation *convert.ApprovalInterruptCorrelation
+}
 
 func (r eventResolver) ResolveAgentEvent(bridge.AgentEventCoordinates) (bridge.AgentEventResolution, error) {
-	return bridge.AgentEventResolution{Identity: r.ids, Blocks: blockResolver{}}, nil
+	return bridge.AgentEventResolution{
+		Identity: r.ids, Blocks: blockResolver{}, PauseID: r.pauseID, Correlation: r.correlation,
+	}, nil
 }
 
 func TestDownloadedAgenticBridge(t *testing.T) {
@@ -67,5 +74,40 @@ func TestDownloadedAgenticBridge(t *testing.T) {
 	adkResult, err := bridge.DrainAgenticEvents(t.Context(), source, eventResolver{ids: ids})
 	if err != nil || len(adkResult.Projections) != 1 {
 		t.Fatalf("ADK result=%#v err=%v", adkResult, err)
+	}
+
+	iterator, generator = adk.NewAsyncIteratorPair[*adk.TypedAgentEvent[*schema.AgenticMessage]]()
+	generator.Send(&adk.TypedAgentEvent[*schema.AgenticMessage]{Action: &adk.AgentAction{Interrupted: &adk.InterruptInfo{
+		InterruptContexts: []*adk.InterruptCtx{{ID: "interrupt", Address: adk.Address{{Type: adk.AddressSegmentAgent, ID: "root"}}}},
+	}}})
+	generator.Send(&adk.TypedAgentEvent[*schema.AgenticMessage]{Action: adk.NewTransferToAgentAction("research")})
+	generator.Send(&adk.TypedAgentEvent[*schema.AgenticMessage]{Action: adk.NewExitAction()})
+	generator.Send(&adk.TypedAgentEvent[*schema.AgenticMessage]{Action: adk.NewBreakLoopAction("root")})
+	generator.Close()
+	source, err = bridge.NewAgentEventSource(iterator, func(error) {}, func(context.Context) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	correlation := &convert.ApprovalInterruptCorrelation{
+		ApprovalRequestID: "approval", InterruptTargetID: "interrupt", InterruptAddress: "agent:root",
+	}
+	observations, err := bridge.DrainAgenticEvents(t.Context(), source, eventResolver{
+		ids: ids, pauseID: "pause", correlation: correlation,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(observations.Interrupts) != 1 || !reflect.DeepEqual(observations.Interrupts[0].Identity, ids) ||
+		observations.Interrupts[0].Pause.PauseID != "pause" ||
+		!reflect.DeepEqual(observations.Interrupts[0].Pause.Correlation, correlation) {
+		t.Fatalf("interrupt observations=%#v", observations.Interrupts)
+	}
+	wantControls := []bridge.AgentControlObservation{
+		{Kind: bridge.AgentControlTransfer, Destination: "research", Identity: ids},
+		{Kind: bridge.AgentControlExit, Identity: ids},
+		{Kind: bridge.AgentControlBreakLoop, Identity: ids},
+	}
+	if !reflect.DeepEqual(observations.Controls, wantControls) {
+		t.Fatalf("control observations=%#v, want %#v", observations.Controls, wantControls)
 	}
 }
