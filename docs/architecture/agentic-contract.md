@@ -100,11 +100,13 @@ result, err := stream.DrainAgenticEvents(
 Complete and exclusive streamed message variants become candidate projections.
 For business interrupts, the resolver supplies a durable pause ID alongside the
 public ADK target IDs/addresses and any separately validated MCP approval
-correlation. Cancellation candidates carry the exact resolved turn/attempt
-identity. The optional configured cancellation candidate records host policy if
-the execution context is cancelled; it never causes cancellation. Transfer,
-exit, and break-loop remain host control observations. Arbitrary customized
-output/action is rejected.
+correlation. Each returned `InterruptCandidate` carries that pause plus the exact
+resolved turn/attempt identity needed for its commit receipt. Cancellation
+candidates carry the same identity scope. The optional configured cancellation
+candidate records host policy if the execution context is cancelled; it never
+causes cancellation. Transfer, exit, and break-loop remain host control
+observations carrying their exact resolved identity; they do not imply a
+lifecycle terminal. Arbitrary customized output/action is rejected.
 
 Cancellation modes and classifications form a closed v1 vocabulary. Immediate
 cancellation requires immediate requested and observed modes. A safe-point

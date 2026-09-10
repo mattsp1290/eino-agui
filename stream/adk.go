@@ -118,6 +118,7 @@ const (
 type AgentControlObservation struct {
 	Kind        AgentControlKind
 	Destination string
+	Identity    AgenticStreamIdentity
 }
 
 type SubagentLifecycleKind string
@@ -152,9 +153,16 @@ type CancellationCandidate struct {
 	Cancellation convert.CancelledV1
 }
 
+// InterruptCandidate binds a public pause observation to the exact
+// host-resolved turn and attempt that owns its commit receipt.
+type InterruptCandidate struct {
+	Identity AgenticStreamIdentity
+	Pause    convert.PausedV1
+}
+
 type AgentEventResult struct {
 	Projections   []*convert.AgenticProjection
-	Interrupts    []convert.PausedV1
+	Interrupts    []InterruptCandidate
 	Cancellations []CancellationCandidate
 	Controls      []AgentControlObservation
 	Subagents     []SubagentLifecycleCandidate
@@ -315,19 +323,25 @@ func DrainAgenticEvents(ctx context.Context, source AgentEventSource, resolver A
 				if _, err := convert.LifecycleDigestV1(envelope); err != nil {
 					return finish(fmt.Errorf("project interrupt: %w", err), true)
 				}
-				result.Interrupts = append(result.Interrupts, paused)
+				result.Interrupts = append(result.Interrupts, InterruptCandidate{
+					Identity: cloneAgenticStreamIdentity(resolution.Identity),
+					Pause:    paused,
+				})
 			}
 			if event.Action.TransferToAgent != nil {
 				if event.Action.TransferToAgent.DestAgentName == "" {
 					return finish(errors.New("agent transfer destination is required"), true)
 				}
-				result.Controls = append(result.Controls, AgentControlObservation{Kind: AgentControlTransfer, Destination: event.Action.TransferToAgent.DestAgentName})
+				result.Controls = append(result.Controls, AgentControlObservation{
+					Kind: AgentControlTransfer, Destination: event.Action.TransferToAgent.DestAgentName,
+					Identity: cloneAgenticStreamIdentity(resolution.Identity),
+				})
 			}
 			if event.Action.Exit {
-				result.Controls = append(result.Controls, AgentControlObservation{Kind: AgentControlExit})
+				result.Controls = append(result.Controls, AgentControlObservation{Kind: AgentControlExit, Identity: cloneAgenticStreamIdentity(resolution.Identity)})
 			}
 			if event.Action.BreakLoop != nil {
-				result.Controls = append(result.Controls, AgentControlObservation{Kind: AgentControlBreakLoop})
+				result.Controls = append(result.Controls, AgentControlObservation{Kind: AgentControlBreakLoop, Identity: cloneAgenticStreamIdentity(resolution.Identity)})
 			}
 		}
 	}

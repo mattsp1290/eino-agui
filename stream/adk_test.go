@@ -168,13 +168,16 @@ func TestDrainAgenticEventsProjectsInterruptWithoutPrivateInfo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Interrupts) != 1 || len(result.Interrupts[0].Targets) != 1 {
+	if len(result.Interrupts) != 1 || len(result.Interrupts[0].Pause.Targets) != 1 {
 		t.Fatalf("interrupts = %#v", result.Interrupts)
 	}
-	if got := result.Interrupts[0].Targets[0].Address; got != "agent:root" {
+	if got := result.Interrupts[0].Pause.Targets[0].Address; got != "agent:root" {
 		t.Fatalf("address = %q", got)
 	}
-	if result.Interrupts[0].PauseID != "pause-1" || result.Interrupts[0].Correlation == nil || result.Interrupts[0].Correlation.ApprovalRequestID != "approval-1" {
+	if !sameStreamIdentity(result.Interrupts[0].Identity, agenticIDs()) {
+		t.Fatalf("interrupt identity = %#v", result.Interrupts[0].Identity)
+	}
+	if result.Interrupts[0].Pause.PauseID != "pause-1" || result.Interrupts[0].Pause.Correlation == nil || result.Interrupts[0].Pause.Correlation.ApprovalRequestID != "approval-1" {
 		t.Fatalf("interrupt = %#v", result.Interrupts[0])
 	}
 	encoded, err := json.Marshal(result)
@@ -455,6 +458,37 @@ func TestDrainAgenticEventsDetachesReturnedCandidateIdentities(t *testing.T) {
 	if cancelled.Cancellations[0].Identity.AgentPath[0].Name != "root" {
 		t.Fatalf("returned cancellation identity aliases resolver memory: %#v", cancelled.Cancellations[0].Identity.AgentPath)
 	}
+
+	interruptIdentity := agenticIDs()
+	correlation := &convert.ApprovalInterruptCorrelation{ApprovalRequestID: "approval", InterruptTargetID: "interrupt", InterruptAddress: "agent:root"}
+	interruptEvent := &adk.TypedAgentEvent[*schema.AgenticMessage]{Action: &adk.AgentAction{Interrupted: &adk.InterruptInfo{InterruptContexts: []*adk.InterruptCtx{{
+		ID: "interrupt", Address: adk.Address{{Type: adk.AddressSegmentAgent, ID: "root"}},
+	}}}}}
+	interruptResolver := testEventResolverFunc(func(AgentEventCoordinates) (AgentEventResolution, error) {
+		return AgentEventResolution{Identity: interruptIdentity, Blocks: testBlockResolver{}, PauseID: "pause", Correlation: correlation}, nil
+	})
+	interrupted, err := DrainAgenticEvents(t.Context(), sourceFromEvents(t, interruptEvent), interruptResolver)
+	if err != nil || len(interrupted.Interrupts) != 1 {
+		t.Fatalf("interrupted=%#v err=%v", interrupted, err)
+	}
+	interruptIdentity.AgentPath[0].Name = "altered"
+	correlation.ApprovalRequestID = "altered"
+	if interrupted.Interrupts[0].Identity.AgentPath[0].Name != "root" || interrupted.Interrupts[0].Pause.Correlation.ApprovalRequestID != "approval" {
+		t.Fatalf("returned interrupt candidate aliases resolver memory: %#v", interrupted.Interrupts[0])
+	}
+
+	controlIdentity := agenticIDs()
+	controlResolver := testEventResolverFunc(func(AgentEventCoordinates) (AgentEventResolution, error) {
+		return AgentEventResolution{Identity: controlIdentity, Blocks: testBlockResolver{}}, nil
+	})
+	controlled, err := DrainAgenticEvents(t.Context(), sourceFromEvents(t, &adk.TypedAgentEvent[*schema.AgenticMessage]{Action: adk.NewExitAction()}), controlResolver)
+	if err != nil || len(controlled.Controls) != 1 {
+		t.Fatalf("controlled=%#v err=%v", controlled, err)
+	}
+	controlIdentity.AgentPath[0].Name = "altered"
+	if controlled.Controls[0].Identity.AgentPath[0].Name != "root" {
+		t.Fatalf("returned control identity aliases resolver memory: %#v", controlled.Controls[0])
+	}
 }
 
 type cleanupFailureSource struct{}
@@ -613,9 +647,9 @@ func TestDrainAgenticEventsReturnsHostControlObservationsInOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []AgentControlObservation{
-		{Kind: AgentControlTransfer, Destination: "research"},
-		{Kind: AgentControlExit},
-		{Kind: AgentControlBreakLoop},
+		{Kind: AgentControlTransfer, Destination: "research", Identity: agenticIDs()},
+		{Kind: AgentControlExit, Identity: agenticIDs()},
+		{Kind: AgentControlBreakLoop, Identity: agenticIDs()},
 	}
 	if result.Partial || !reflect.DeepEqual(result.Controls, want) {
 		t.Fatalf("result=%#v controls=%#v, want %#v", result, result.Controls, want)
